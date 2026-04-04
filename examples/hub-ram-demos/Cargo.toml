@@ -1,0 +1,36 @@
+[package]
+name = "hub-ram-demos"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Claude Opus 4.6 (AI-assisted, March 2026)"]
+repository = "https://github.com/nicoacacia/spike-rtic"
+description = """
+Example RAM demos for the LEGO SPIKE Prime hub monitor.
+Uploaded via COBS, executed via the `go` command.
+Linked to 0x20040000 (SRAM2).
+"""
+
+[workspace]
+
+[dependencies]
+spike-hub-api = { path = "../../spike-hub-api" }
+
+[[bin]]
+name = "spike-demo"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = false
+panic = "abort"
+
+[[example]]
+name = "hub-usr-app"
+path = "examples/hub_usr_app.rs"
+test = false
+bench = false

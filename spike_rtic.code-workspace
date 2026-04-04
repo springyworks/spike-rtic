@@ -1,0 +1,23 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../../pyth/pybricks-micropython"
+		},
+		{
+			"path": "../../../../C/mri"
+		}
+	],
+	"settings": {
+		"workbench.colorCustomizations": {
+			"activityBar.background": "#3F281C",
+			"titleBar.activeBackground": "#583828",
+			"titleBar.inactiveBackground": "#583828",
+			"titleBar.activeForeground": "#FDFCFB",
+			"statusBar.background": "#583828",
+			"statusBar.foreground": "#FDFCFB"
+		}
+	}
+}

@@ -1,0 +1,59 @@
+[workspace]
+exclude = ["hub-ram-demos", "spike-hub-api"]
+
+[package]
+name = "spike-rtic"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Claude Opus 4.6 (AI-assisted, March 2026)"]
+repository = "https://github.com/nicoacacia/spike-rtic"
+readme = "README.md"
+keywords = ["lego", "spike-prime", "rtic", "stm32", "firmware"]
+categories = ["embedded", "no-std", "hardware-support"]
+description = """
+RTIC v2 based firmware for the LEGO SPIKE Prime Hub (STM32F413VGT6).
+5×5 LED matrix debug display + USB CDC serial prompt.
+Flash via DFU: dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D firmware.bin
+"""
+
+[dependencies]
+# RTIC v2 framework
+rtic = { version = "2", features = ["thumbv7-backend"] }
+rtic-monotonics = { version = "2", features = ["cortex-m-systick"] }
+rtic-sync = "1"
+
+# Cortex-M essentials
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+
+# STM32F413 PAC (register-level access)
+stm32f4 = { version = "0.15", features = ["stm32f413", "rt"] }
+
+# USB CDC serial
+synopsys-usb-otg = { version = "0.4", features = ["fs", "cortex-m"] }
+usb-device = "0.3"
+usbd-serial = "0.2"
+
+# Panic handler
+panic-halt = "1"
+
+# Shared API for RAM demos
+spike-hub-api = { path = "spike-hub-api" }
+
+[[bin]]
+name = "spike-rtic"
+test = false
+bench = false
+
+[profile.dev]
+opt-level = "s"
+panic = "abort"
+debug = 2
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1
+debug = 2

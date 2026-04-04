@@ -1,0 +1,16 @@
+[package]
+name = "spike-hub-api"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Claude Opus 4.6 (AI-assisted, March 2026)"]
+repository = "https://github.com/nicoacacia/spike-rtic"
+description = """
+Shared API definitions for LEGO SPIKE Prime hub firmware and RAM demos.
+Defines the MonitorApi callback table, button flags, and constants.
+Pure #[no_std], zero dependencies — just types and constants.
+"""
+
+[workspace]
+
+# No dependencies — this crate is pure type definitions.

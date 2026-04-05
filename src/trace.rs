@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Lightweight RAM trace buffer for post-mortem debugging.
 //!
 //! Records timestamped trace entries in a fixed-size ring buffer

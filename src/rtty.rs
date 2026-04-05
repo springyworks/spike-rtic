@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! RTTY (Radio Teletype) Baudot/ITA2 encoder for the SPIKE Prime speaker.
 //!
 //! Generates classic amateur-radio FSK tones via DAC triangle wave.

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! LSM6DS3TR-C IMU driver via I2C2 (bit-bang).
 //!
 //! The SPIKE Prime hub has an LSM6DS3TR-C 6-DOF accelerometer/gyroscope

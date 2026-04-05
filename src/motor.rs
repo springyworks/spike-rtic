@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Motor driver for LEGO SPIKE Prime Hub.
 //!
 //! Supports all 6 motor ports (A–F) using H-bridge PWM via TIM1/TIM3/TIM4.
@@ -159,7 +160,7 @@ pub unsafe fn init() {
     init_timer(pins::TIM4_BASE);
 
     // Configure each port's channels and start in coast (both pins LOW)
-    for (idx, port) in PORTS.iter().enumerate() {
+    for (_idx, port) in PORTS.iter().enumerate() {
         init_channel(port.timer, port.ccr1_offset);
         init_channel(port.timer, port.ccr2_offset);
         // Coast: both motor pins as GPIO output LOW
@@ -314,7 +315,7 @@ pub fn trial(port_idx: u32, hold_ms: u32, print: TrialPrint) {
         }
     };
 
-    let mut buf = [0u8; 80];
+    let _buf = [0u8; 80];
 
     // ── Stage 1: GPIO direct drive (no PWM) — forward ──
     {
@@ -352,7 +353,7 @@ pub fn trial(port_idx: u32, hold_ms: u32, print: TrialPrint) {
         }
         crate::power::delay_ms(hold_ms);
         coast();
-        unsafe { set_ccxp(mp.ccr1_offset, false); } // restore
+        set_ccxp(mp.ccr1_offset, false); // restore
     }
 
     // ── Stage 4: Pybricks-style slow-decay 50% ──
@@ -367,7 +368,7 @@ pub fn trial(port_idx: u32, hold_ms: u32, print: TrialPrint) {
         }
         crate::power::delay_ms(hold_ms);
         coast();
-        unsafe { set_ccxp(mp.ccr1_offset, false); }
+        set_ccxp(mp.ccr1_offset, false);
     }
 
     // ── Stage 5: Pybricks-style slow-decay 25% ──
@@ -382,7 +383,7 @@ pub fn trial(port_idx: u32, hold_ms: u32, print: TrialPrint) {
         }
         crate::power::delay_ms(hold_ms);
         coast();
-        unsafe { set_ccxp(mp.ccr1_offset, false); }
+        set_ccxp(mp.ccr1_offset, false);
     }
 
     // ── Stage 6: Pybricks-style slow-decay 10% ──
@@ -397,7 +398,7 @@ pub fn trial(port_idx: u32, hold_ms: u32, print: TrialPrint) {
         }
         crate::power::delay_ms(hold_ms);
         coast();
-        unsafe { set_ccxp(mp.ccr1_offset, false); }
+        set_ccxp(mp.ccr1_offset, false);
     }
 
     // ── Stage 7: Fast-decay (our current) 100% (normal PWM + pin2=LOW) ──

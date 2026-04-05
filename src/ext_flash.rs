@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! W25Q256JV external SPI flash driver (32 MB).
 //!
 //! The LEGO SPIKE Prime Hub has a Winbond W25Q256JV on SPI2:

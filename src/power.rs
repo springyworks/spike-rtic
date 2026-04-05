@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Power management and DFU re-entry for LEGO SPIKE Prime Hub.
 //!
 //! The hub's power is software-controlled:

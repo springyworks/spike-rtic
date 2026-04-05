@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! GDB Remote Serial Protocol (RSP) stub — "Demon mode".
 //!
 //! Implements a minimal GDB stub that runs over the same USB CDC serial

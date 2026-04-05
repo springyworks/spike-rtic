@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! MPU sandbox for user-uploaded RAM demos.
 //!
 //! Protects the Demon monitor firmware from buggy/malicious user code

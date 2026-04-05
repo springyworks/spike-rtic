@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Lightweight RTIC task state tracker.
 //!
 //! Single `AtomicU32` bitfield — zero cost when not queried.

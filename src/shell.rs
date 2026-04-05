@@ -576,7 +576,7 @@ impl Shell {
                 self.push(b"FW: RTIC v2 spike-prime-rtic\r\n");
 
                 // Stack high-water mark
-                let (used, total) = unsafe { sandbox::stack_high_water() };
+                let (used, total) = sandbox::stack_high_water();
                 let mut tmp = [0u8; 80];
                 let mut w = BufWriter::new(&mut tmp);
                 let _ = write!(w, "Stack: {} / {} bytes used\r\n", used, total);
@@ -1424,7 +1424,7 @@ impl Shell {
                                 let steps: [i32; 12] = [5, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100];
                                 for &s in &steps {
                                     motor::set(idx as u32, s);
-                                    let (psc, arr, ccr1, ccr2, ccer, cr1, m1, m2) =
+                                    let (_psc, _arr, ccr1, ccr2, ccer, _cr1, m1, m2) =
                                         motor::diag(idx as u32);
                                     let mut tmp = [0u8; 96];
                                     let mut w = BufWriter::new(&mut tmp);

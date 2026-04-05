@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! LUMP (LEGO UART Message Protocol) sensor driver.
 //!
 //! Translated from pybricks-micropython `lib/pbio/src/port_lump.c`.
@@ -21,6 +22,7 @@ use crate::pins;
 use crate::reg::{reg_modify, reg_read, reg_write};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use core::cell::UnsafeCell;
+use core::ptr::addr_of_mut;
 
 // ── Global per-port state (lock-free) ──
 // Each port's state is written by exactly one poll task and read by
@@ -339,7 +341,7 @@ static DEMO_KA_SUPPRESS: AtomicU8 = AtomicU8::new(0);
 pub fn demo_set_port(idx: u8) {
     DEMO_PORT_IDX.store(idx, Ordering::Release);
     DEMO_KA_CTR.store(0, Ordering::Relaxed);
-    unsafe { DEMO_STATE = SensorState::new(); }
+    unsafe { *addr_of_mut!(DEMO_STATE) = SensorState::new(); }
     if idx < NUM_PORTS as u8 {
         rx_flush(idx as usize);
     }
@@ -351,7 +353,7 @@ pub fn demo_sensor_read(buf: &mut [u8]) -> usize {
     let idx = DEMO_PORT_IDX.load(Ordering::Acquire);
     if idx > 5 || buf.is_empty() { return 0; }
 
-    let state = unsafe { &mut DEMO_STATE };
+    let state = unsafe { &mut *addr_of_mut!(DEMO_STATE) };
     state.port_idx = idx;
     lump_poll_data(state);
 
@@ -389,7 +391,7 @@ pub fn demo_sensor_mode(mode: u8) {
     let idx = DEMO_PORT_IDX.load(Ordering::Acquire);
     if idx > 5 { return; }
     // Clear stale data from previous mode
-    let state = unsafe { &mut DEMO_STATE };
+    let state = unsafe { &mut *addr_of_mut!(DEMO_STATE) };
     state.data_len = 0;
     state.data_received = false;
     // Suppress keepalives for ~100ms (5 maintain calls at 20ms each)
@@ -437,7 +439,7 @@ pub fn demo_sensor_light(r: u8, g: u8, b: u8) {
 pub fn demo_maintain() {
     let idx = DEMO_PORT_IDX.load(Ordering::Acquire);
     if idx > 5 { return; }
-    let state = unsafe { &mut DEMO_STATE };
+    let state = unsafe { &mut *addr_of_mut!(DEMO_STATE) };
     state.port_idx = idx;
     lump_poll_data(state);
     // Decrement suppress counter; only send keepalive when it reaches 0
@@ -478,8 +480,8 @@ pub fn demo_set_motor_port(idx: u8) {
     DEMO_MOTOR_PORT_IDX.store(idx, Ordering::Release);
     DEMO_MOTOR_KA_CTR.store(0, Ordering::Relaxed);
     unsafe {
-        DEMO_MOTOR_STATE = SensorState::new();
-        DEMO_MOTOR_STATE.port_idx = idx;
+        *addr_of_mut!(DEMO_MOTOR_STATE) = SensorState::new();
+        (*addr_of_mut!(DEMO_MOTOR_STATE)).port_idx = idx;
     }
     if idx < NUM_PORTS as u8 {
         rx_flush(idx as usize);
@@ -491,7 +493,7 @@ pub fn demo_set_motor_port(idx: u8) {
 pub fn demo_motor_maintain() {
     let idx = DEMO_MOTOR_PORT_IDX.load(Ordering::Acquire);
     if idx > 5 { return; }
-    let state = unsafe { &mut DEMO_MOTOR_STATE };
+    let state = unsafe { &mut *addr_of_mut!(DEMO_MOTOR_STATE) };
     state.port_idx = idx;
     lump_poll_data(state);
     let ctr = DEMO_MOTOR_KA_CTR.load(Ordering::Relaxed).wrapping_add(1);
@@ -507,7 +509,7 @@ pub fn demo_motor_maintain() {
 pub fn demo_motor_position() -> i32 {
     let idx = DEMO_MOTOR_PORT_IDX.load(Ordering::Acquire);
     if idx > 5 { return 0; }
-    let state = unsafe { &mut DEMO_MOTOR_STATE };
+    let state = unsafe { &mut *addr_of_mut!(DEMO_MOTOR_STATE) };
     state.port_idx = idx;
     lump_poll_data(state);
     state.motor_pos_degrees()

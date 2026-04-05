@@ -694,7 +694,6 @@ mod app {
                 cx.shared.shell.lock(|shell| {
                     let mut t = [0u8; 80];
                     let mut w = crate::shell::BufWriter::new(&mut t);
-                    let mut w = crate::shell::BufWriter::new(&mut t);
                     let _ = core::fmt::Write::write_fmt(
                         &mut w,
                         format_args!("  t={}ms pos={} err={} {}\r\n",

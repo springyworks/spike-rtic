@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Non-blocking speaker driver for LEGO SPIKE Prime Hub.
 //!
 //! Uses the on-board DAC1 channel 1 (PA4) routed through an amplifier

@@ -187,7 +187,7 @@ extern "C" {
 
 /// Get pointer to the global jmp_buf (for run_demo to pass to abort_setjmp).
 pub fn jmpbuf_ptr() -> *mut u32 {
-    unsafe { ABORT_JMPBUF.as_mut_ptr() }
+    core::ptr::addr_of_mut!(ABORT_JMPBUF).cast()
 }
 
 /// Mark jmp_buf valid/invalid.
@@ -200,7 +200,7 @@ pub fn set_jmpbuf_valid(v: bool) {
 fn abort_longjmp_if_requested() {
     if ABORT.load(Ordering::Acquire) && JMPBUF_VALID.load(Ordering::Acquire) {
         JMPBUF_VALID.store(false, Ordering::Release);
-        unsafe { abort_longjmp(ABORT_JMPBUF.as_ptr()); }
+        unsafe { abort_longjmp(core::ptr::addr_of!(ABORT_JMPBUF).cast()); }
     }
 }
 

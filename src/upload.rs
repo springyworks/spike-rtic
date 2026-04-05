@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Minimal COBS receiver for binary upload over USB CDC.
 //!
 //! Protocol:

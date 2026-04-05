@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Pybricks-style servo control: observer + PID + trajectory.
 //!
 //! Port of libpybricks control.c, observer.c, integrator.c, servo_settings.c

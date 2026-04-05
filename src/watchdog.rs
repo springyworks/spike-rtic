@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Independent Watchdog (IWDG) for automatic hub reset on hang.
 //!
 //! The STM32F413 IWDG is clocked from the ~32 KHz LSI oscillator and

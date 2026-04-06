@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+#![allow(static_mut_refs)]
 //! GDB Remote Serial Protocol (RSP) stub — "Demon mode".
 //!
 //! Implements a minimal GDB stub that runs over the same USB CDC serial
@@ -43,13 +44,28 @@
 //! `feed()` call and sends a stop-reply packet to GDB.
 
 use crate::dwt;
+use crate::fpb;
 
 // ── Packet buffer ──
 // GDB RSP packets can be large (register dump = 17×8 = 136 hex chars + framing).
 // Memory reads: m addr,len → up to 256 bytes = 512 hex chars.
 // We keep it modest since we are on a microcontroller.
-const PKT_BUF_SIZE: usize = 600;
-const RESP_BUF_SIZE: usize = 600;
+const PKT_BUF_SIZE: usize = 1024;
+const RESP_BUF_SIZE: usize = 1024;
+
+// ── Software breakpoint table ──
+// For SRAM2 demos (0x2004_xxxx), FPB can't set breakpoints (Flash-only).
+// Instead, we save the original Thumb instruction and write BKPT #0 (0xBE00).
+const MAX_SW_BREAKPOINTS: usize = 16;
+struct SwBreakpoint {
+    addr: u32,
+    orig: u16, // saved original Thumb instruction
+    active: bool,
+}
+static mut SW_BKPTS: [SwBreakpoint; MAX_SW_BREAKPOINTS] = {
+    const EMPTY: SwBreakpoint = SwBreakpoint { addr: 0, orig: 0, active: false };
+    [EMPTY; MAX_SW_BREAKPOINTS]
+};
 
 /// GDB RSP protocol state.
 #[derive(Clone, Copy, PartialEq)]
@@ -84,6 +100,9 @@ pub struct GdbStub {
     /// responded with a stop-reply yet).  While running, we poll for
     /// DWT hits and Ctrl-C (0x03) interrupts.
     target_running: bool,
+    /// Set when continuing past a software breakpoint: the single-step
+    /// halt should re-patch the BKPT and auto-continue (not report to GDB).
+    step_then_continue: bool,
 }
 
 impl GdbStub {
@@ -97,19 +116,46 @@ impl GdbStub {
             pending_stop: false,
             last_debugmon: 0,
             target_running: false,
+            step_then_continue: false,
         }
     }
 
     /// Enter GDB mode.  Called from the `gdb` shell command.
     /// Returns a greeting message to push to the shell output.
+    ///
+    /// Pends DebugMonitor so the demo halts in Thread mode before GDB
+    /// connects.  By the time GDB sends `?`, registers are valid and
+    /// the target is genuinely stopped.
     pub fn enter(&mut self) -> &'static [u8] {
         self.active = true;
         self.state = RxState::Idle;
         self.pkt_len = 0;
-        self.pending_stop = false;
+        self.pending_stop = true; // report halt to first `?`
         self.last_debugmon = dwt::debugmon_count();
         self.target_running = false;
+        self.step_then_continue = false;
+        // Halt the demo: pend DebugMonitor so it fires on return to
+        // Thread mode (where sandboxed demos run).
+        dwt::set_gdb_active(true);
+        dwt::pend_debugmon();
         b"GDB stub active. Connect with:\r\n  arm-none-eabi-gdb -ex \"target remote /dev/ttyACM0\"\r\nType Ctrl-C three times rapidly to exit GDB mode.\r\n"
+    }
+
+    /// Silent detach — called when DTR drops (host closed port) while
+    /// GDB RSP is active.  Cleans up all debug state and resumes the
+    /// target without writing any response (nobody is listening).
+    pub fn auto_detach(&mut self) {
+        unsafe {
+            dwt::clear_all();
+            crate::fpb::clear_all();
+            clear_all_sw_breakpoints();
+            dwt::cleanup_for_detach();
+        }
+        if dwt::is_halted() {
+            dwt::resume_target();
+        }
+        self.active = false;
+        self.target_running = false;
     }
 
     /// Feed incoming USB bytes while in GDB mode.
@@ -118,16 +164,20 @@ impl GdbStub {
     pub fn feed(&mut self, data: &[u8], resp: &mut [u8; RESP_BUF_SIZE]) -> usize {
         let mut rw = RespWriter::new(resp);
 
-        // Check for new DebugMonitor hits
-        let dm = dwt::debugmon_count();
-        if dm != self.last_debugmon {
-            self.last_debugmon = dm;
-            if self.target_running {
-                self.target_running = false;
-                // Send stop-reply: T05 = SIGTRAP (watchpoint)
-                write_packet(&mut rw, b"T05");
+        // Check if target has halted inside DebugMonitor handler
+        if dwt::is_halted() && self.target_running {
+            if self.step_then_continue {
+                // We single-stepped past a removed BKPT — re-patch and resume
+                self.step_then_continue = false;
+                unsafe { repatch_all_sw_breakpoints(); }
+                dwt::clear_single_step();
+                dwt::resume_target();
+                // target_running stays true — we don't report this halt to GDB
             } else {
-                self.pending_stop = true;
+                self.target_running = false;
+                self.last_debugmon = dwt::debugmon_count();
+                // Send stop-reply: T05 = SIGTRAP (breakpoint/watchpoint)
+                write_packet(&mut rw, b"T05");
             }
         }
 
@@ -205,46 +255,94 @@ impl GdbStub {
         match cmd {
             // ── Stop reason ──
             b'?' => {
+                // If target is running, halt it first so registers are valid.
+                if self.target_running {
+                    self.target_running = false;
+                    dwt::pend_debugmon();
+                    // Give DebugMonitor time to fire (it pends, fires on
+                    // return to Thread mode — but we're in an ISR here,
+                    // so we just mark the state; GDB will see valid regs
+                    // on the next poll cycle).
+                }
                 if self.pending_stop {
                     self.pending_stop = false;
-                    write_packet(rw, b"T05"); // SIGTRAP
+                    write_packet(rw, b"T05"); // SIGTRAP (breakpoint/watchpoint hit)
+                } else if dwt::is_halted() {
+                    write_packet(rw, b"T05"); // genuinely halted
                 } else {
-                    write_packet(rw, b"S00"); // no signal, just attached
+                    write_packet(rw, b"S05"); // SIGTRAP — initial stop
                 }
             }
 
-            // ── Read all registers (ARM: R0-R12, SP, LR, PC, xPSR = 17 regs) ──
+            // ── Read all registers ──
+            // With target XML (arm-core.xml), GDB expects 16 core regs + cpsr = 17 regs.
+            //   R0-R15  (16 × 8 hex = 128)
+            //   cpsr    (1 × 8 hex  = 8)
+            // Total = 136 hex chars
             b'g' => {
-                let mut buf = [0u8; 17 * 8]; // 17 regs × 8 hex chars
-                let mut pos = 0;
-                // Read from DWT saved context if we have a hit, else read live
-                // For now, read live registers via MSP/PSP
-                // R0-R12: not easily accessible without an exception frame
-                // We'll provide zeros for R0-R12, then SP, LR, PC from live state
-                for i in 0..13u32 {
-                    // R0-R12: read as 0 (no saved context outside exception)
-                    let _ = i;
-                    hex_encode_u32_le(0, &mut buf[pos..]);
-                    pos += 8;
+                let mut buf = [b'0'; 136]; // pre-fill with '0' (zeros)
+                if dwt::regs_valid() {
+                    // Use saved registers from DebugMonitor exception
+                    for i in 0..16usize {
+                        hex_encode_u32_le(dwt::saved_reg(i), &mut buf[i * 8..]);
+                    }
+                    // cpsr = xPSR (index 16)
+                    hex_encode_u32_le(dwt::saved_reg(16), &mut buf[128..]);
+                } else {
+                    // No DebugMon context — read what we can live
+                    // R0-R12: zeros (can't access caller's regs)
+                    // SP (R13) — current MSP
+                    let sp: u32;
+                    unsafe { core::arch::asm!("mrs {}, MSP", out(reg) sp) };
+                    hex_encode_u32_le(sp, &mut buf[13 * 8..]);
+                    // LR (R14)
+                    let lr: u32;
+                    unsafe { core::arch::asm!("mov {}, lr", out(reg) lr) };
+                    hex_encode_u32_le(lr, &mut buf[14 * 8..]);
+                    // PC (R15) — approximate with LR
+                    hex_encode_u32_le(lr, &mut buf[15 * 8..]);
+                    // cpsr
+                    let xpsr: u32;
+                    unsafe { core::arch::asm!("mrs {}, xPSR", out(reg) xpsr) };
+                    hex_encode_u32_le(xpsr, &mut buf[128..]);
                 }
-                // SP (R13) — current MSP
-                let sp: u32;
-                unsafe { core::arch::asm!("mrs {}, MSP", out(reg) sp) };
-                hex_encode_u32_le(sp, &mut buf[pos..]);
-                pos += 8;
-                // LR (R14) — current LR
-                let lr: u32;
-                unsafe { core::arch::asm!("mov {}, lr", out(reg) lr) };
-                hex_encode_u32_le(lr, &mut buf[pos..]);
-                pos += 8;
-                // PC (R15) — approximate with LR
-                hex_encode_u32_le(lr, &mut buf[pos..]);
-                pos += 8;
-                // xPSR
-                let xpsr: u32;
-                unsafe { core::arch::asm!("mrs {}, xPSR", out(reg) xpsr) };
-                hex_encode_u32_le(xpsr, &mut buf[pos..]);
                 write_packet(rw, &buf);
+            }
+
+            // ── Read single register: p n ──
+            b'p' => {
+                if let Some(n) = parse_hex_str(args) {
+                    let mut buf = [b'0'; 8];
+                    if n <= 15 {
+                        if dwt::regs_valid() {
+                            hex_encode_u32_le(dwt::saved_reg(n as usize), &mut buf);
+                        } else if n == 13 {
+                            let sp: u32;
+                            unsafe { core::arch::asm!("mrs {}, MSP", out(reg) sp) };
+                            hex_encode_u32_le(sp, &mut buf);
+                        } else if n == 14 || n == 15 {
+                            let lr: u32;
+                            unsafe { core::arch::asm!("mov {}, lr", out(reg) lr) };
+                            hex_encode_u32_le(lr, &mut buf);
+                        }
+                        write_packet(rw, &buf);
+                    } else if n == 25 {
+                        // cpsr (register 25 in the arm-core.xml numbering = index 16 after R0-R15)
+                        if dwt::regs_valid() {
+                            hex_encode_u32_le(dwt::saved_reg(16), &mut buf);
+                        } else {
+                            let xpsr: u32;
+                            unsafe { core::arch::asm!("mrs {}, xPSR", out(reg) xpsr) };
+                            hex_encode_u32_le(xpsr, &mut buf);
+                        }
+                        write_packet(rw, &buf);
+                    } else {
+                        // Unknown register
+                        write_packet(rw, b"E45");
+                    }
+                } else {
+                    write_packet(rw, b"E01");
+                }
             }
 
             // ── Write all registers (stub: accept but ignore) ──
@@ -299,6 +397,25 @@ impl GdbStub {
             b'Z' => {
                 if let Some((wp_type, addr, kind)) = parse_z_args(args) {
                     match wp_type {
+                        // Z0 = software breakpoint (BKPT instruction patching)
+                        0 => {
+                            let ok = unsafe { set_sw_breakpoint(addr) };
+                            if ok {
+                                write_packet(rw, b"OK");
+                            } else {
+                                write_packet(rw, b"E29");
+                            }
+                        }
+                        // Z1 = hardware breakpoint (FPB — Flash only)
+                        1 => {
+                            let ok = unsafe { fpb::set_breakpoint(addr) };
+                            if ok.is_some() {
+                                write_packet(rw, b"OK");
+                            } else {
+                                // FPB can't reach SRAM2; suggest swbreak to GDB
+                                write_packet(rw, b"E29");
+                            }
+                        }
                         // Z2 = write watchpoint, Z3 = read, Z4 = access
                         2 | 3 | 4 => {
                             let func = match wp_type {
@@ -306,11 +423,10 @@ impl GdbStub {
                                 3 => dwt::WatchFunc::DataRead,
                                 _ => dwt::WatchFunc::DataRW,
                             };
-                            // Find a free comparator
                             let mut set = false;
                             for n in 0..4u32 {
                                 let (_, _, f, _) = dwt::read_watchpoint(n);
-                                if f == 0 { // disabled
+                                if f == 0 {
                                     let mask = dwt_mask_for_size(kind);
                                     unsafe { dwt::set_watchpoint(n, addr, mask, func); }
                                     set = true;
@@ -320,12 +436,10 @@ impl GdbStub {
                             if set {
                                 write_packet(rw, b"OK");
                             } else {
-                                write_packet(rw, b"E29"); // no free comparator
+                                write_packet(rw, b"E29");
                             }
                         }
-                        // Z0 = software breakpoint, Z1 = hardware breakpoint
-                        // Not supported yet
-                        _ => write_packet(rw, b""),  // empty = unsupported
+                        _ => write_packet(rw, b""),
                     }
                 } else {
                     write_packet(rw, b"E01");
@@ -336,8 +450,17 @@ impl GdbStub {
             b'z' => {
                 if let Some((wp_type, addr, _kind)) = parse_z_args(args) {
                     match wp_type {
+                        // z0 = remove software breakpoint
+                        0 => {
+                            unsafe { clear_sw_breakpoint(addr); }
+                            write_packet(rw, b"OK");
+                        }
+                        // z1 = remove hardware breakpoint
+                        1 => {
+                            unsafe { fpb::clear_breakpoint(addr); }
+                            write_packet(rw, b"OK");
+                        }
                         2 | 3 | 4 => {
-                            // Find matching comparator by address
                             for n in 0..4u32 {
                                 let (comp_addr, _, _, _) = dwt::read_watchpoint(n);
                                 if comp_addr == addr {
@@ -356,29 +479,72 @@ impl GdbStub {
 
             // ── Continue ──
             b'c' => {
-                self.target_running = true;
+                dwt::clear_single_step();
+                // If stopped at a software breakpoint, temporarily remove it
+                // and single-step past, then re-patch.
+                let at_bkpt = unsafe { unpatch_bkpt_at_pc() };
+                if at_bkpt {
+                    // Step one instruction past the restored original,
+                    // then re-patch and continue.  The step will trigger
+                    // DebugMonitor → halt.  We handle re-patch + resume
+                    // by setting a flag so the next halt auto-continues.
+                    self.step_then_continue = true;
+                    dwt::request_single_step();
+                    self.target_running = true;
+                    if dwt::is_halted() {
+                        dwt::resume_target();
+                    }
+                } else {
+                    self.target_running = true;
+                    if dwt::is_halted() {
+                        dwt::resume_target();
+                    }
+                }
                 // Don't send a response now — response comes when
                 // the target stops (watchpoint hit or Ctrl-C).
             }
 
-            // ── Single step (not fully implemented — just continue) ──
+            // ── Single step ──
             b's' => {
-                // Real single-step needs MON_STEP in DEMCR.
-                // For now, treat as continue — the next DWT hit stops us.
+                // Request single-step: DebugMon handler will set MON_STEP in DEMCR.
+                dwt::request_single_step();
                 self.target_running = true;
+                if dwt::is_halted() {
+                    dwt::resume_target();
+                }
             }
 
             // ── Detach ──
             b'D' => {
                 write_packet(rw, b"OK");
-                unsafe { dwt::clear_all(); }
+                unsafe {
+                    dwt::clear_all();
+                    fpb::clear_all();
+                    clear_all_sw_breakpoints();
+                    dwt::cleanup_for_detach();
+                }
+                // Resume target if halted so the demo doesn't hang forever
+                if dwt::is_halted() {
+                    dwt::resume_target();
+                }
                 self.active = false;
+                self.target_running = false;
             }
 
             // ── Kill ──
             b'k' => {
-                unsafe { dwt::clear_all(); }
+                write_packet(rw, b"OK");
+                unsafe {
+                    dwt::clear_all();
+                    fpb::clear_all();
+                    clear_all_sw_breakpoints();
+                    dwt::cleanup_for_detach();
+                }
+                if dwt::is_halted() {
+                    dwt::resume_target();
+                }
                 self.active = false;
+                self.target_running = false;
             }
 
             // ── Query packets ──
@@ -389,6 +555,11 @@ impl GdbStub {
             // ── Thread ops (stub: always OK) ──
             b'H' => {
                 write_packet(rw, b"OK");
+            }
+
+            // ── Thread alive ──
+            b'T' => {
+                write_packet(rw, b"OK"); // thread 1 always alive
             }
 
             // ── vCont? and other v-packets ──
@@ -408,23 +579,49 @@ impl GdbStub {
     fn handle_q(&self, args: &[u8], rw: &mut RespWriter) {
         if starts_with(args, b"Supported") {
             // Tell GDB what we support
-            write_packet(rw, b"PacketSize=256;hwbreak-;swbreak-");
+            // swbreak+ = we support Z0 software breakpoints
+            // hwbreak+ = we support Z1 hardware breakpoints
+            // qXfer:features:read+ = we provide target description XML
+            write_packet(rw, b"PacketSize=1024;swbreak+;hwbreak+;qXfer:features:read+");
+        } else if starts_with(args, b"Xfer:features:read:target.xml:") {
+            let after = &args[b"Xfer:features:read:target.xml:".len()..];
+            self.serve_xfer(after, TARGET_XML, rw);
         } else if starts_with(args, b"Attached") {
             // 1 = attached to existing process (don't kill on detach)
             write_packet(rw, b"1");
         } else if starts_with(args, b"TStatus") {
-            // No trace running
             write_packet(rw, b"");
         } else if starts_with(args, b"fThreadInfo") {
-            // Single thread
             write_packet(rw, b"m1");
         } else if starts_with(args, b"sThreadInfo") {
-            write_packet(rw, b"l"); // end of list
+            write_packet(rw, b"l");
         } else if starts_with(args, b"C") {
-            // Current thread
             write_packet(rw, b"QC1");
         } else {
-            write_packet(rw, b""); // unsupported
+            write_packet(rw, b"");
+        }
+    }
+
+    /// Serve a qXfer chunk: parse "offset,length" and return 'l' (last) or 'm' (more).
+    fn serve_xfer(&self, offset_len: &[u8], data: &[u8], rw: &mut RespWriter) {
+        if let Some((offset, length)) = parse_m_args(offset_len) {
+            let off = offset as usize;
+            let len = length as usize;
+            if off >= data.len() {
+                write_packet(rw, b"l"); // past end
+            } else {
+                let end = core::cmp::min(off + len, data.len());
+                let chunk = &data[off..end];
+                let is_last = end >= data.len();
+                // Build response: 'l' or 'm' prefix + data
+                let mut buf = [0u8; 1000];
+                buf[0] = if is_last { b'l' } else { b'm' };
+                let clen = core::cmp::min(chunk.len(), buf.len() - 1);
+                buf[1..1 + clen].copy_from_slice(&chunk[..clen]);
+                write_packet(rw, &buf[..1 + clen]);
+            }
+        } else {
+            write_packet(rw, b"E01");
         }
     }
 }
@@ -558,3 +755,116 @@ fn dwt_mask_for_size(size: u32) -> u32 {
     }
     mask
 }
+
+// ── Software breakpoint helpers ──
+
+/// BKPT #0 encoding for Thumb (T1 encoding): 0xBE00
+const THUMB_BKPT: u16 = 0xBE00;
+
+/// Set a software breakpoint by patching memory with BKPT #0.
+/// Returns true on success.
+unsafe fn set_sw_breakpoint(addr: u32) -> bool {
+    // Check if already set
+    for bp in SW_BKPTS.iter() {
+        if bp.active && bp.addr == addr {
+            return true; // already set
+        }
+    }
+    // Find a free slot
+    for bp in SW_BKPTS.iter_mut() {
+        if !bp.active {
+            // Save original instruction (Thumb = 16-bit)
+            bp.orig = core::ptr::read_volatile(addr as *const u16);
+            bp.addr = addr;
+            bp.active = true;
+            // Write BKPT #0
+            core::ptr::write_volatile(addr as *mut u16, THUMB_BKPT);
+            // ISB to flush instruction pipeline after patching code
+            core::arch::asm!("isb");
+            return true;
+        }
+    }
+    false // no free slot
+}
+
+/// Remove a software breakpoint, restoring the original instruction.
+unsafe fn clear_sw_breakpoint(addr: u32) {
+    for bp in SW_BKPTS.iter_mut() {
+        if bp.active && bp.addr == addr {
+            // Restore original instruction
+            core::ptr::write_volatile(addr as *mut u16, bp.orig);
+            core::arch::asm!("isb");
+            bp.active = false;
+            return;
+        }
+    }
+}
+
+/// Remove all software breakpoints.
+unsafe fn clear_all_sw_breakpoints() {
+    for bp in SW_BKPTS.iter_mut() {
+        if bp.active {
+            core::ptr::write_volatile(bp.addr as *mut u16, bp.orig);
+            bp.active = false;
+        }
+    }
+    core::arch::asm!("isb");
+}
+
+/// Check if the target is stopped at a software breakpoint address.
+/// If so, temporarily restore the original instruction so the CPU can
+/// execute it before re-patching.  Returns true if a BKPT was unpatched
+/// (caller should single-step then re-patch).
+unsafe fn unpatch_bkpt_at_pc() -> bool {
+    let pc = dwt::saved_reg(15); // R15 = PC
+    for bp in SW_BKPTS.iter_mut() {
+        if bp.active && bp.addr == pc {
+            // Restore original instruction temporarily
+            core::ptr::write_volatile(bp.addr as *mut u16, bp.orig);
+            core::arch::asm!("isb");
+            return true;
+        }
+    }
+    false
+}
+
+/// Re-patch all active software breakpoints (after stepping past one).
+unsafe fn repatch_all_sw_breakpoints() {
+    for bp in SW_BKPTS.iter() {
+        if bp.active {
+            core::ptr::write_volatile(bp.addr as *mut u16, THUMB_BKPT);
+        }
+    }
+    core::arch::asm!("isb");
+}
+
+// ── Target description XML ──
+// This tells GDB we are an ARM Cortex-M target with 16 GP regs + cpsr.
+// Without this, GDB defaults to "i386" or legacy "arm" with FPA regs.
+
+// Single inline target description — no xi:include, everything in one fetch.
+// This tells GDB we are ARM Cortex-M with 16 GP regs + xPSR (m-profile).
+const TARGET_XML: &[u8] = b"<?xml version=\"1.0\"?>\
+<!DOCTYPE target SYSTEM \"gdb-target.dtd\">\
+<target version=\"1.0\">\
+<architecture>arm</architecture>\
+<feature name=\"org.gnu.gdb.arm.m-profile\">\
+<reg name=\"r0\" bitsize=\"32\"/>\
+<reg name=\"r1\" bitsize=\"32\"/>\
+<reg name=\"r2\" bitsize=\"32\"/>\
+<reg name=\"r3\" bitsize=\"32\"/>\
+<reg name=\"r4\" bitsize=\"32\"/>\
+<reg name=\"r5\" bitsize=\"32\"/>\
+<reg name=\"r6\" bitsize=\"32\"/>\
+<reg name=\"r7\" bitsize=\"32\"/>\
+<reg name=\"r8\" bitsize=\"32\"/>\
+<reg name=\"r9\" bitsize=\"32\"/>\
+<reg name=\"r10\" bitsize=\"32\"/>\
+<reg name=\"r11\" bitsize=\"32\"/>\
+<reg name=\"r12\" bitsize=\"32\"/>\
+<reg name=\"sp\" bitsize=\"32\" type=\"data_ptr\"/>\
+<reg name=\"lr\" bitsize=\"32\"/>\
+<reg name=\"pc\" bitsize=\"32\" type=\"code_ptr\"/>\
+<reg name=\"xpsr\" bitsize=\"32\" regnum=\"25\"/>\
+</feature>\
+</target>";

@@ -210,6 +210,11 @@ impl Shell {
     /// Call from the USB ISR on every poll.  When the host opens a new
     /// `serial.Serial()` connection, DTR transitions false→true.  We
     /// reset `host_synced` so the next `feed()` clears stale output.
+    ///
+    /// DTR falling edge is NOT used for GDB auto-detach because the
+    /// debug pipeline legitimately closes the port to hand it to GDB.
+    /// The GDB_ACTIVE guard in DebugMonitor prevents hangs if GDB
+    /// disconnects without sending a detach packet.
     pub fn check_dtr(&mut self, dtr: bool) {
         if dtr && !self.last_dtr {
             // DTR rising edge: host (re)opened the port
@@ -218,11 +223,15 @@ impl Shell {
         self.last_dtr = dtr;
     }
 
-    /// Mark the host as disconnected (USB no longer Configured).
+    /// Mark the host as disconnected (USB cable unplugged / bus reset).
     /// Called from the USB ISR when `usb_dev.state() != Configured`.
     /// Ensures the next connection clears any stale output.
+    /// Also auto-detaches GDB if active — cable unplug is unambiguous.
     pub fn usb_disconnected(&mut self) {
         self.host_synced = false;
+        if self.gdb.active {
+            self.gdb.auto_detach();
+        }
     }
 
     /// Whether the host is synced (first input received after connect).
@@ -296,6 +305,27 @@ impl Shell {
         let n = core::cmp::min(data.len(), space);
         self.out[self.out_len..self.out_len + n].copy_from_slice(&data[..n]);
         self.out_len += n;
+    }
+
+    /// True when the shell is in GDB RSP mode.
+    pub fn is_gdb_active(&self) -> bool {
+        self.gdb.active
+    }
+
+    /// Poll GDB halt status without incoming data.
+    /// Called from the USB ISR every 5ms (via usb_flush pend) to detect
+    /// when DebugMonitor halts the target and send T05 to GDB.
+    pub fn poll_gdb(&mut self) {
+        if self.gdb.active {
+            let mut gdb_tmp = [0u8; 1024];
+            let n = self.gdb.feed(&[], &mut gdb_tmp);
+            if n > 0 {
+                self.push(&gdb_tmp[..n]);
+            }
+            if !self.gdb.active {
+                self.push(b"\r\nGDB detached. Back to shell.\r\nspike> ");
+            }
+        }
     }
 
     /// Return a slice of bytes waiting to be sent over USB CDC.
@@ -397,7 +427,7 @@ impl Shell {
 
         // ── GDB RSP mode ("Demon mode"): route bytes to GDB stub ──
         if self.gdb.active {
-            let mut gdb_tmp = [0u8; 600];
+            let mut gdb_tmp = [0u8; 1024];
             let n = self.gdb.feed(data, &mut gdb_tmp);
             if n > 0 {
                 self.push(&gdb_tmp[..n]);

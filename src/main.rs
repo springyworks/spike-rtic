@@ -47,6 +47,7 @@ mod ext_flash;
 mod imu;
 mod led_matrix;
 mod dwt;
+mod fpb;
 mod gdb_rsp;
 mod motor;
 mod pins;
@@ -206,6 +207,13 @@ mod app {
         // ── Speaker (DAC1 + TIM6 triangle wave) ──
         unsafe { sound::init() };
 
+        // ── Watchdog-reset detection ──
+        // Must be checked BEFORE starting the new IWDG (which would
+        // clear the old state).  Sound must be initialized first.
+        if watchdog::was_iwdg_reset() {
+            watchdog::watchdog_reset_chime();
+        }
+
         // ── External SPI flash (W25Q256JV, 32 MB on SPI2) ──
         unsafe { ext_flash::init() };
 
@@ -343,8 +351,15 @@ mod app {
                             task_state::mark_usb_rx();
                             shell.feed(&buf[..count], sensor_state, motor_state);
                         }
-                        _ => {}
+                        _ => {
+                            // No data from host — still poll GDB halt status
+                            // so T05 stop-replies reach GDB even when it's silent.
+                            shell.poll_gdb();
+                        }
                     }
+                } else {
+                    // usb_flush pended us with no USB activity — poll GDB
+                    shell.poll_gdb();
                 }
 
                 // If shell requested a sensor probe, spawn the task
@@ -429,12 +444,17 @@ mod app {
                     run_demo::spawn(addr).ok();
                 }
 
-                // Drain demo subprocess output buffer first
-                let demo_out = user_app_io::pending();
-                if !demo_out.is_empty() {
-                    match serial.write(demo_out) {
-                        Ok(n) if n > 0 => { task_state::mark_usb_tx(); user_app_io::advance(n); }
-                        _ => {}
+                // Drain demo subprocess output buffer — but NOT in
+                // GDB mode, where raw demo text would corrupt the RSP
+                // stream.  In GDB mode the demo is halted anyway; any
+                // buffered text is flushed after GDB detaches.
+                if !shell.is_gdb_active() {
+                    let demo_out = user_app_io::pending();
+                    if !demo_out.is_empty() {
+                        match serial.write(demo_out) {
+                            Ok(n) if n > 0 => { task_state::mark_usb_tx(); user_app_io::advance(n); }
+                            _ => {}
+                        }
                     }
                 }
 

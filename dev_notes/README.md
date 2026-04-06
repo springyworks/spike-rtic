@@ -1,20 +1,21 @@
-# dev_notes/ — Index & Status (2026-04-03)
+# dev\_notes/ — Index & Status (2026-04-03)
 
 Guide to all documentation in this folder. Files categorized by role and freshness.
 
 ## Legend
 
-- **CORE** — Active reference, directly used during development
-- **BACKGROUND** — Pybricks/external analysis, useful context but not our implementation
-- **STALE** — Outdated or superseded; kept for history
+*   **CORE** — Active reference, directly used during development
+*   **BACKGROUND** — Pybricks/external analysis, useful context but not our implementation
+*   **STALE** — Outdated or superseded; kept for history
 
 ---
 
 ## Core Reference (keep, actively maintained)
 
 | File | Topic | Notes |
-|------|-------|-------|
+| --- | --- | --- |
 | [sensor-fixes.md](sensor-fixes.md) | LUMP keepalive, chunked delay, mode-switch arch, flash, motor PWM confirmed | **Golden source** — validated findings and working fixes |
+| [gdb-debugging.md](gdb-debugging.md) | GDB RSP architecture, DebugMonitor priority, trampoline, GDB\_ACTIVE guard, workflow | **NEW** — full GDB debug stack design and lessons learned |
 | [sensor-power-requirements.md](sensor-power-requirements.md) | Extra PWM-like power for some peripherals | **NEW** — some LEGO parts need power pin activation |
 | [motor-encoder-mechanism.md](motor-encoder-mechanism.md) | Motor position = LUMP UART, not quadrature | Short, factual, important for anyone asking "where does encoder data come from?" |
 | [motor-position-controller.md](motor-position-controller.md) | Ramp+nudge controller design, tunable parameters, test results | Documents our implemented `motor_goto` controller |
@@ -25,25 +26,20 @@ Guide to all documentation in this folder. Files categorized by role and freshne
 ## Background / External Analysis (useful context, not our implementation)
 
 | File | Topic | Notes |
-|------|-------|-------|
-| [pybricks_lowspeed_motor_analysis.md](pybricks_lowspeed_motor_analysis.md) | Pybricks PID: adaptive Kp, integral deadzone, anti-windup | How Pybricks does closed-loop. We do open-loop ramp+nudge. Not directly applicable but explains the gap. |
+| --- | --- | --- |
+| [pybricks\_lowspeed\_motor\_analysis.md](pybricks_lowspeed_motor_analysis.md) | Pybricks PID: adaptive Kp, integral deadzone, anti-windup | How Pybricks does closed-loop. We do open-loop ramp+nudge. Not directly applicable but explains the gap. |
 | [motor-pwm-findings.md](motor-pwm-findings.md) | Pybricks PWM: 12kHz, duty range, slow-decay | Background from Pybricks source. Our motor.rs is the implementation. |
-| [build-hat-reference.md](build-hat-reference.md) | Raspberry Pi Build HAT protocol, device IDs, PID params | External reference (RP2040 Build HAT), not SPIKE RTIC hardware. Useful for stiction compensation ideas. |
+| [self-hosted-DWT-use-address-triggering.md](self-hosted-DWT-use-address-triggering.md) | DWT self-hosted watchpoint concept, DHCSR/FPB/DebugMonitor overview | Background Q\&A that informed the DWT implementation |
+| [GDB remote seriela protocol.md](GDB%20remote%20seriela%20protocol.md) | Link to GDB RSP docs | One-line reference link |
+| [stack-corruption-and-guard-bands.md](stack-corruption-and-guard-bands.md) | MPU guard bands, stack painting, fault marker | Background on crash detection mechanisms |
 | [AI-talks to hub-example-chat.md](AI-talks%20to%20hub-example-chat.md) | Sensor probing transcripts, color sensor type 61, mode switching tests | Development log / working transcript. Historical value. |
-
-## Stale / Superseded
-
-| File | Topic | Notes |
-|------|-------|-------|
-| [uart-protocol.md](uart-protocol.md) | Single URL to external GitHub repo | **Empty** — content superseded by `pybricks-lump-protocol-reference.md`. Can be deleted. |
-| [copilot-self-rules.md](copilot-self-rules.md) | AI agent rules (10 rules) | **Duplicate** of `.github/copilot-instructions.md`. Canonical source is that file + `AIcoder-thinkings/spike-rules.md`. Can be deleted. |
 
 ---
 
 ## Merge Opportunities
 
-1. **Motor docs** — `motor-pwm-findings.md` + `pybricks_lowspeed_motor_analysis.md` could merge into one background file (`pybricks-motor-analysis.md`) since both are "how Pybricks does it"
-2. **Our motor docs** — `motor-position-controller.md` + `motor-encoder-mechanism.md` could merge into `motor-control.md` since both describe our implementation
-3. **Rules** — Delete `copilot-self-rules.md`, keep `.github/copilot-instructions.md` as canonical
+1.  **Motor docs** — `motor-pwm-findings.md` + `pybricks_lowspeed_motor_analysis.md` could merge into one background file (`pybricks-motor-analysis.md`) since both are "how Pybricks does it"
+2.  **Our motor docs** — `motor-position-controller.md` + `motor-encoder-mechanism.md` could merge into `motor-control.md` since both describe our implementation
+3.  **Rules** — Delete `copilot-self-rules.md`, keep `.github/copilot-instructions.md` as canonical
 
-*Note: Given the complexity of this project, prefer keeping files separate and using this index. Wrong merges are worse than extra files.*
+_Note: Given the complexity of this project, prefer keeping files separate and using this index. Wrong merges are worse than extra files._

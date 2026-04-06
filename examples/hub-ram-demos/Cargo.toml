@@ -26,7 +26,7 @@ bench = false
 opt-level = "s"
 lto = true
 codegen-units = 1
-debug = false
+debug = 2
 panic = "abort"
 
 [[example]]

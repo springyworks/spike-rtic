@@ -25,7 +25,9 @@
 //! # DEMCR (0xE000_EDFC)
 //!   - Bit 24: TRCENA   — global trace/DWT enable
 //!   - Bit 16: MON_EN   — DebugMonitor exception enable
-//!   - Bit 19: MON_REQ  — pend DebugMonitor (manual trigger)
+//!   - Bit 17: MON_PEND — pend DebugMonitor exception
+//!   - Bit 18: MON_STEP — single-step on DebugMonitor return
+//!   - Bit 19: MON_REQ  — software semaphore (does NOT pend!)
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -110,6 +112,103 @@ static LAST_HIT_PC: [AtomicU32; 4] = [
 /// Total DebugMonitor invocations (including spurious).
 static DEBUGMON_COUNT: AtomicU32 = AtomicU32::new(0);
 
+// ── Saved register context from DebugMonitor exception ──
+// The exception frame auto-stacks R0-R3, R12, LR, PC, xPSR.
+// We manually save R4-R11 + SP in the handler.
+// Layout: [R0..R12, SP, LR, PC, xPSR]  (17 words)
+static SAVED_REGS: [AtomicU32; 17] = [
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), // R0-R3
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), // R4-R7
+    AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), // R8-R11
+    AtomicU32::new(0), // R12
+    AtomicU32::new(0), // SP (R13) — pre-exception SP
+    AtomicU32::new(0), // LR (R14)
+    AtomicU32::new(0), // PC (R15)
+    AtomicU32::new(0), // xPSR
+];
+/// True when SAVED_REGS contains a valid snapshot from DebugMonitor.
+static REGS_VALID: AtomicU32 = AtomicU32::new(0);
+
+/// If non-zero, the DebugMon handler will set MON_STEP in DEMCR
+/// before returning, causing a single-step.
+static SINGLE_STEP_REQUEST: AtomicU32 = AtomicU32::new(0);
+
+/// When non-zero, the DebugMonitor handler has halted (spin-waiting).
+/// The RSP stub reads this to know the target is truly stopped.
+static TARGET_HALTED: AtomicU32 = AtomicU32::new(0);
+
+/// Set to non-zero by the RSP stub to tell the halted handler to resume.
+static RESUME_REQUEST: AtomicU32 = AtomicU32::new(0);
+
+/// Non-zero when GDB RSP is actively listening.  The DebugMonitor
+/// handler checks this before halting — if no GDB is connected,
+/// the handler just clears stale debug state and returns immediately
+/// instead of spinning in a WFE loop that nobody will ever resume.
+static GDB_ACTIVE: AtomicU32 = AtomicU32::new(0);
+
+/// Read saved register `n` (0=R0 .. 15=PC, 16=xPSR).
+pub fn saved_reg(n: usize) -> u32 {
+    if n < 17 { SAVED_REGS[n].load(Ordering::Relaxed) } else { 0 }
+}
+
+/// True if saved registers are valid (DebugMon has fired at least once).
+pub fn regs_valid() -> bool {
+    REGS_VALID.load(Ordering::Relaxed) != 0
+}
+
+/// Request single-step: next DebugMon return will set MON_STEP.
+pub fn request_single_step() {
+    SINGLE_STEP_REQUEST.store(1, Ordering::Relaxed);
+}
+
+/// Clear single-step request (used after normal continue).
+pub fn clear_single_step() {
+    SINGLE_STEP_REQUEST.store(0, Ordering::Relaxed);
+}
+
+/// True if the target is halted inside the DebugMonitor handler.
+pub fn is_halted() -> bool {
+    TARGET_HALTED.load(Ordering::Relaxed) != 0
+}
+
+/// Tell the halted DebugMonitor handler to resume execution.
+pub fn resume_target() {
+    RESUME_REQUEST.store(1, Ordering::Release);
+    // DSB ensures the store is visible; SEV wakes the handler's WFE.
+    unsafe { core::arch::asm!("dsb", "sev"); }
+}
+
+/// Mark GDB as actively listening.  Allows DebugMonitor to halt.
+pub fn set_gdb_active(active: bool) {
+    GDB_ACTIVE.store(if active { 1 } else { 0 }, Ordering::Release);
+}
+
+/// Full debug-state cleanup for GDB detach / auto-detach.
+///
+/// Clears SINGLE_STEP_REQUEST, MON_STEP (DEMCR bit 18) and
+/// MON_PEND (DEMCR bit 17), then marks GDB inactive so any
+/// stray DebugMonitor invocations become harmless no-ops.
+pub unsafe fn cleanup_for_detach() {
+    clear_single_step();
+    let demcr = core::ptr::read_volatile(DEMCR);
+    core::ptr::write_volatile(DEMCR, demcr & !((1 << 18) | (1 << 17)));
+    GDB_ACTIVE.store(0, Ordering::Release);
+}
+
+/// Pend the DebugMonitor exception (MON_PEND, DEMCR bit 17).
+/// The exception fires as soon as the CPU returns to code at lower
+/// priority than DebugMonitor (i.e. Thread mode where demos run).
+/// Used to halt the target when entering GDB RSP mode.
+///
+/// Note: bit 19 (MON_REQ) is just a software semaphore — it does NOT
+/// pend the exception.  Bit 17 (MON_PEND) is the real pending bit.
+pub fn pend_debugmon() {
+    unsafe {
+        let demcr = core::ptr::read_volatile(DEMCR);
+        core::ptr::write_volatile(DEMCR, demcr | (1 << 17)); // MON_PEND
+    }
+}
+
 /// Initialize DWT for self-hosted watchpoints.
 ///
 /// - Unlocks DWT (LAR write).
@@ -132,11 +231,17 @@ pub unsafe fn init() {
     core::ptr::write_volatile(DWT_BASE as *mut u32, ctrl | 1);
 
     // 4. Set DebugMonitor priority.
-    //    We want it above normal tasks (priority 0xF0) but below faults.
-    //    Use priority 0x40 (NVIC priority 4) — same ballpark as MemManage.
+    //    Demos run from #[idle] (Thread mode, lowest priority), so DebugMon
+    //    can preempt them at any priority.  But the handler spin-waits when
+    //    halted, so USB ISR (RTIC priority 2 = NVIC 0xE0) must be able to
+    //    preempt to deliver GDB 'continue' commands.
+    //    RTIC logical-to-NVIC mapping: ((16 - prio) << 4).
+    //      - RTIC pri 2 → 0xE0  (USB ISR, heartbeat, sensor)
+    //      - RTIC pri 1 → 0xF0  (run_demo, test_all)
+    //    Use 0xF0 — the lowest HW priority — so all RTIC tasks preempt.
     //    SHPR3 bits [7:0] = DebugMonitor priority.
     let shpr3 = core::ptr::read_volatile(SCB_SHPR3);
-    core::ptr::write_volatile(SCB_SHPR3, (shpr3 & !0xFF) | 0x40);
+    core::ptr::write_volatile(SCB_SHPR3, (shpr3 & !0xFF) | 0xF0);
 
     // 5. Clear all comparators
     for n in 0..4u32 {
@@ -219,30 +324,158 @@ pub fn debugmon_count() -> u32 {
 
 /// DebugMonitor exception handler.
 ///
-/// Called when a DWT watchpoint fires.  Scans all 4 comparators for the
-/// MATCHED bit (DWT_FUNCTIONx bit 24, auto-cleared on read) and records
-/// the hit.
+/// Called when a DWT watchpoint or FPB breakpoint fires (or after a single step).
+/// Saves the full register context from the exception frame and manually-pushed
+/// R4-R11 so the GDB RSP stub can serve register reads.
 ///
-/// The stacked PC from the exception frame shows which instruction triggered
-/// the watchpoint.
+/// The Cortex-M hardware auto-stacks: R0, R1, R2, R3, R12, LR, PC, xPSR.
+/// We manually read R4-R11 and the pre-exception SP.
+///
+/// **Stack selection:** Sandboxed demos run in Thread mode using PSP
+/// (CONTROL.SPSEL=1).  The hardware exception frame (R0,R1,R2,R3,R12,
+/// LR,PC,xPSR) is pushed onto whichever stack was active pre-exception
+/// (PSP for demos, MSP for idle/privileged).  EXC_RETURN bit 2 tells
+/// us which: 0=MSP, 1=PSP.  The trampoline reads both stacks and
+/// passes both to the inner handler.
 #[allow(non_snake_case)]
+#[unsafe(naked)]
 pub unsafe extern "C" fn DebugMonitor_handler() {
+    // Naked trampoline:
+    //   1. Save R4-R11 and LR (EXC_RETURN) on MSP (handler mode always uses MSP)
+    //   2. Check EXC_RETURN (LR) bit 2 to find the exception frame stack
+    //   3. Pass r0 = pointer to saved R4-R11 on MSP
+    //          r1 = pointer to exception frame (on MSP or PSP)
+    //          r2 = 1 if exception frame is on PSP, 0 if MSP
+    core::arch::naked_asm!(
+        "push {{r4-r11, lr}}",  // save R4-R11 + EXC_RETURN on MSP (9 words)
+        "mov  r0, sp",          // r0 = pointer to saved R4-R11 on MSP
+        "tst  lr, #4",          // test EXC_RETURN bit 2 (stack selection)
+        "ite  eq",
+        "addeq r1, sp, #36",   // bit2=0: MSP — exception frame above 9-word push
+        "mrsne r1, PSP",       // bit2=1: PSP — exception frame is on PSP
+        "ite  eq",
+        "moveq r2, #0",        // r2 = 0 (MSP)
+        "movne r2, #1",        // r2 = 1 (PSP)
+        "bl   {handler}",      // call the real handler (clobbers LR)
+        "pop  {{r4-r11, lr}}",  // restore R4-R11 + EXC_RETURN
+        "bx   lr",             // return from exception with correct EXC_RETURN
+        handler = sym debugmon_inner,
+    );
+}
+
+/// Inner DebugMonitor handler.
+///
+/// Arguments:
+///   `regs_ptr`  — pointer to R4..R11 saved on MSP by the trampoline
+///   `frame_ptr` — pointer to the hardware exception frame (R0,R1,R2,R3,R12,LR,PC,xPSR)
+///                 This is on MSP or PSP depending on what Thread mode was using.
+///   `on_psp`    — 1 if exception frame is on PSP, 0 if on MSP
+unsafe extern "C" fn debugmon_inner(regs_ptr: *const u32, frame_ptr: *const u32, on_psp: u32) {
+    let _ = on_psp; // available for future register-write support
     DEBUGMON_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    // Read stacked PC from exception frame.
-    // DebugMonitor uses MSP (we're in Handler mode).
-    let sp: u32;
-    core::arch::asm!("mrs {}, MSP", out(reg) sp);
-    // Exception frame: R0, R1, R2, R3, R12, LR, PC, xPSR
-    let stacked_pc = core::ptr::read_volatile((sp + 24) as *const u32);
+    // Read R4-R11 from our manually-pushed save area on MSP
+    let r4  = core::ptr::read_volatile(regs_ptr.add(0));
+    let r5  = core::ptr::read_volatile(regs_ptr.add(1));
+    let r6  = core::ptr::read_volatile(regs_ptr.add(2));
+    let r7  = core::ptr::read_volatile(regs_ptr.add(3));
+    let r8  = core::ptr::read_volatile(regs_ptr.add(4));
+    let r9  = core::ptr::read_volatile(regs_ptr.add(5));
+    let r10 = core::ptr::read_volatile(regs_ptr.add(6));
+    let r11 = core::ptr::read_volatile(regs_ptr.add(7));
 
-    // Check each comparator's MATCHED bit (cleared on read of FUNCTION reg)
+    // Read hardware exception frame (on whichever stack was active)
+    let r0   = core::ptr::read_volatile(frame_ptr.add(0));
+    let r1   = core::ptr::read_volatile(frame_ptr.add(1));
+    let r2   = core::ptr::read_volatile(frame_ptr.add(2));
+    let r3   = core::ptr::read_volatile(frame_ptr.add(3));
+    let r12  = core::ptr::read_volatile(frame_ptr.add(4));
+    let lr   = core::ptr::read_volatile(frame_ptr.add(5));
+    let pc   = core::ptr::read_volatile(frame_ptr.add(6));
+    let xpsr = core::ptr::read_volatile(frame_ptr.add(7));
+
+    // Pre-exception SP: exception frame + 8 words, on whichever stack
+    let pre_sp = frame_ptr as u32 + 8 * 4;
+
+    // Store into SAVED_REGS [R0..R12, SP, LR, PC, xPSR]
+    SAVED_REGS[0].store(r0, Ordering::Relaxed);
+    SAVED_REGS[1].store(r1, Ordering::Relaxed);
+    SAVED_REGS[2].store(r2, Ordering::Relaxed);
+    SAVED_REGS[3].store(r3, Ordering::Relaxed);
+    SAVED_REGS[4].store(r4, Ordering::Relaxed);
+    SAVED_REGS[5].store(r5, Ordering::Relaxed);
+    SAVED_REGS[6].store(r6, Ordering::Relaxed);
+    SAVED_REGS[7].store(r7, Ordering::Relaxed);
+    SAVED_REGS[8].store(r8, Ordering::Relaxed);
+    SAVED_REGS[9].store(r9, Ordering::Relaxed);
+    SAVED_REGS[10].store(r10, Ordering::Relaxed);
+    SAVED_REGS[11].store(r11, Ordering::Relaxed);
+    SAVED_REGS[12].store(r12, Ordering::Relaxed);
+    SAVED_REGS[13].store(pre_sp, Ordering::Relaxed);
+    SAVED_REGS[14].store(lr, Ordering::Relaxed);
+    SAVED_REGS[15].store(pc, Ordering::Relaxed);
+    SAVED_REGS[16].store(xpsr, Ordering::Relaxed);
+    REGS_VALID.store(1, Ordering::Relaxed);
+
+    // Check each DWT comparator's MATCHED bit (cleared on read of FUNCTION reg)
+    let mut dwt_hit = false;
     for n in 0..4u32 {
         let func = core::ptr::read_volatile(func_addr(n));
         if func & (1 << 24) != 0 {
-            // This comparator fired
             HIT_COUNT[n as usize].fetch_add(1, Ordering::Relaxed);
-            LAST_HIT_PC[n as usize].store(stacked_pc, Ordering::Relaxed);
+            LAST_HIT_PC[n as usize].store(pc, Ordering::Relaxed);
+            dwt_hit = true;
         }
+    }
+
+    // If no DWT comparator matched, this was likely an FPB breakpoint or BKPT
+    if !dwt_hit {
+        crate::fpb::record_hit(pc);
+    }
+
+    // Handle single-step: if requested, set MON_STEP in DEMCR.
+    // MON_STEP (bit 18) causes the CPU to DebugMon after executing
+    // exactly one instruction upon return from this exception.
+    if SINGLE_STEP_REQUEST.load(Ordering::Relaxed) != 0 {
+        SINGLE_STEP_REQUEST.store(0, Ordering::Relaxed);
+        let demcr = core::ptr::read_volatile(DEMCR);
+        core::ptr::write_volatile(DEMCR, demcr | (1 << 18)); // MON_STEP
+    } else {
+        // Clear MON_STEP so normal continue doesn't keep stepping
+        let demcr = core::ptr::read_volatile(DEMCR);
+        core::ptr::write_volatile(DEMCR, demcr & !(1 << 18));
+    }
+
+    // ── Guard: skip halt if no GDB listener ──
+    // After detach or USB disconnect, GDB_ACTIVE is cleared.
+    // If DebugMonitor re-fires (stale MON_STEP, MON_PEND, or DWT hit),
+    // halting here would freeze the demo forever since nobody will send
+    // RESUME_REQUEST.  Clean up and return immediately instead.
+    if GDB_ACTIVE.load(Ordering::Acquire) == 0 {
+        // Clear MON_STEP so we don't immediately re-fire
+        let demcr = core::ptr::read_volatile(DEMCR);
+        core::ptr::write_volatile(DEMCR, demcr & !((1 << 18) | (1 << 17)));
+        return;
+    }
+
+    // ── Halt: spin-wait until the RSP stub says resume ──
+    // This is what makes GDB "halt" actually work — the target thread
+    // is frozen inside this exception handler until GDB sends 'c' or 's'.
+    RESUME_REQUEST.store(0, Ordering::Relaxed);
+    TARGET_HALTED.store(1, Ordering::Release);
+
+    // Spin-wait with WFE to save power. The RSP stub sets RESUME_REQUEST
+    // and the USB interrupt wakes us via SEV (event register).
+    while RESUME_REQUEST.load(Ordering::Acquire) == 0 {
+        core::arch::asm!("wfe");
+    }
+
+    TARGET_HALTED.store(0, Ordering::Release);
+
+    // If single-step was requested during the halt, set MON_STEP now
+    if SINGLE_STEP_REQUEST.load(Ordering::Relaxed) != 0 {
+        SINGLE_STEP_REQUEST.store(0, Ordering::Relaxed);
+        let demcr = core::ptr::read_volatile(DEMCR);
+        core::ptr::write_volatile(DEMCR, demcr | (1 << 18));
     }
 }

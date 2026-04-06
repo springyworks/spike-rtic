@@ -1,0 +1,49 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug gdb_exercise",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb-multiarch",
+            "miDebuggerServerAddress": "/tmp/spike-hub",
+            "stopAtEntry": false,
+            "setupCommands": [
+                { "text": "set remotetimeout 10" },
+                { "text": "set mem inaccessible-by-default off" },
+                { "text": "set architecture arm" },
+                { "text": "set arm force-mode thumb" }
+            ],
+            "sourceFileMap": {
+                "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
+                "src": "${workspaceFolder}/examples/hub-ram-demos/src"
+            },
+            "preLaunchTask": "debug-gdb-exercise"
+        },
+        {
+            "name": "Debug gdb_simple",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb-multiarch",
+            "miDebuggerServerAddress": "/tmp/spike-hub",
+            "stopAtEntry": false,
+            "setupCommands": [
+                { "text": "set remotetimeout 10" },
+                { "text": "set mem inaccessible-by-default off" },
+                { "text": "set architecture arm" },
+                { "text": "set arm force-mode thumb" }
+            ],
+            "sourceFileMap": {
+                "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
+                "src": "${workspaceFolder}/examples/hub-ram-demos/src"
+            },
+            "preLaunchTask": "debug-gdb-simple"
+        }
+    ]
+}

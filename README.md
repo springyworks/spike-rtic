@@ -28,7 +28,7 @@ hardware debugger.
 ## Quick Start
 
 ```bash
-# Build (from project root)
+# Build the firmware (from project root)
 cargo build --release
 
 # Convert to binary (ALWAYS to target/spike-rtic.bin)
@@ -72,7 +72,8 @@ Full hardware details in [REFERENCE_MANUAL.md §1](REFERENCE_MANUAL.md#1-hardwar
 - **50+ shell commands** — memory dump, register inspect, motor/sensor control, SPI flash
 - **RAM demo sandbox** — upload binaries via COBS, execute sandboxed (MPU + SVC) or privileged
 - **DWT hardware watchpoints** — 4 self-hosted comparators, DebugMonitor exception, no JTAG needed
-- **GDB RSP stub** — remote debug over USB CDC (memory/register read-write, watchpoints)
+- **GDB RSP stub** — remote debug over USB CDC: continue, step, halt, registers, memory, watchpoints, backtrace — no JTAG needed
+- **VS Code F5 debugging** — automated build → upload → GDB attach pipeline
 - **Unix-style process management** — kill -9/-2/-15, Ctrl-C, ring-button zones, pause/resume
 - **MonitorApi v10** — 24-field callback table for demo↔firmware interface
 - **32 MB external flash** — store/load/run demos from SPI flash

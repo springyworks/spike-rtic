@@ -1,22 +1,22 @@
 # Raspberry Pi Build HAT — LPF2 Protocol Reference
 
-Research date: 2026-03-28
-Source: https://www.raspberrypi.com/documentation/accessories/build-hat.html
-Python lib: https://github.com/RaspberryPiFoundation/python-build-hat (MIT, v0.9.0)
-.NET lib: https://github.com/dotnet/iot/tree/main/src/devices/BuildHat
+Research date: 2026-03-28  
+Source: https://www.raspberrypi.com/documentation/accessories/build-hat.html  
+Python lib: https://github.com/RaspberryPiFoundation/python-build-hat (MIT, v0.9.0)  
+.NET lib: https://github.com/dotnet/iot/tree/main/src/devices/BuildHat  
 Serial protocol spec: https://pip.raspberrypi.com/documents/RP-008140-DS
 
 ## Architecture
 
-The Build HAT has an **RP2040 microcontroller** that handles ALL low-level LUMP
-protocol (sync, keepalives, mode switching, data parsing). The Raspberry Pi talks
-to the RP2040 via a **high-level text serial protocol** at 115200 baud on
+The Build HAT has an **RP2040 microcontroller** that handles ALL low-level LUMP  
+protocol (sync, keepalives, mode switching, data parsing). The Raspberry Pi talks  
+to the RP2040 via a **high-level text serial protocol** at 115200 baud on  
 GPIO14(TX)/GPIO15(RX). The Python/C#/.NET libraries are just serial console wrappers.
 
-The RP2040 firmware is a **proprietary binary blob** loaded from `firmware.bin`
+The RP2040 firmware is a **proprietary binary blob** loaded from `firmware.bin`  
 at initialization. It is NOT open source.
 
-**We (spike_rtic) handle LUMP directly on the STM32** — no intermediary MCU.
+**We (spike\_rtic) handle LUMP directly on the STM32** — no intermediary MCU.  
 The Build HAT approach is fundamentally different from ours.
 
 ## Serial Protocol Commands (Pi → RP2040)
@@ -51,7 +51,7 @@ pwmparams <pwmthresh> <minpwm>
 ## Device Type IDs
 
 | Type | Name | LEGO Part |
-|------|------|-----------|
+| --- | --- | --- |
 | 1 | Passive Motor (system medium motor) | 45303 |
 | 2 | Passive Motor (train motor) | 88011 |
 | 8 | Light | 88005 |
@@ -74,6 +74,7 @@ pwmparams <pwmthresh> <minpwm>
 ## Motor Combi Modes (Active Motors)
 
 Active motors use combi mode for simultaneous speed + position + absolute position:
+
 ```python
 # Motors with absolute position (type 48, 49, 65, 75, 76):
 self.mode([(1, 0), (2, 0), (3, 0)])  # speed, position, abs_position
@@ -83,28 +84,31 @@ self.mode([(1, 0), (2, 0)])  # speed, position only
 ```
 
 Mode mapping for SPIKE motors:
-- Mode 0: Power (PWM duty cycle)
-- Mode 1: Speed (degrees/sec)
-- Mode 2: Position (cumulative degrees, i32)
-- Mode 3: Absolute position (-180 to 180)
-- Mode 4: CALIB (combo calibration mode)
+
+*   Mode 0: Power (PWM duty cycle)
+*   Mode 1: Speed (degrees/sec)
+*   Mode 2: Position (cumulative degrees, i32)
+*   Mode 3: Absolute position (-180 to 180)
+*   Mode 4: CALIB (combo calibration mode)
 
 ## PID Parameters from Python Library
 
 Speed hold PID:
+
 ```
 pid {port} 0 0 s1 1 0 0.003 0.01 0 100 0.01
 ```
 
 Positional ramp PID:
+
 ```
 pid {port} 0 1 s4 0.0027777778 0 5 0 .1 3 0.01
 set ramp {current_pos} {target_pos} {duration_seconds} 0
 ```
 
-- Position values in decimal rotations (pos/360.0), not degrees
-- Speed range collapsed: speed * 0.05 for percentage mode, speed/60 for RPM mode
-- Power limit default 0.7
+*   Position values in decimal rotations (pos/360.0), not degrees
+*   Speed range collapsed: speed \* 0.05 for percentage mode, speed/60 for RPM mode
+*   Power limit default 0.7
 
 ## PWM Parameters
 
@@ -114,15 +118,15 @@ motor.pwmparams(0.65, 0.01)  # Default values
 # minpwm=0.01: below this ratio, cut drive entirely (dead-zone for stiction)
 ```
 
-This is relevant to our stiction problem — the Build HAT firmware has built-in
+This is relevant to our stiction problem — the Build HAT firmware has built-in  
 dead-zone and fast/slow PWM switching that we should implement.
 
 ## Key Insight: We Don't Need Legacy Support
 
-User note: "Pybricks assumes immediately that there is a highspeed device
+User note: "Pybricks assumes immediately that there is a highspeed device  
 connected to the LPF2 port, I personally do not use legacy LEGO stuff."
 
-All modern SPIKE devices (types 48, 49, 61, 62, 63, 64, 65, 75, 76) are
-high-speed 115200 baud. The 2400 baud LUMP sync is only needed for the initial
-handshake — the sensor always starts at 2400, then negotiates up. But we could
+All modern SPIKE devices (types 48, 49, 61, 62, 63, 64, 65, 75, 76) are  
+high-speed 115200 baud. The 2400 baud LUMP sync is only needed for the initial  
+handshake — the sensor always starts at 2400, then negotiates up. But we could  
 potentially speed up the sync by reducing timeouts and being more aggressive.

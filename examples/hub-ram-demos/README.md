@@ -40,16 +40,18 @@ command — no reflash required.
 ### 1.1 Build
 
 ```bash
-cd examples/hub-ram-demos
+# From anywhere — $PROJECT_ROOT is auto-set by .bashrc on every cd
+cd $PROJECT_ROOT/examples/hub-ram-demos
 cargo build --release
 ```
 
-Extract a raw binary for upload:
+Extract a raw binary for upload (examples live under `examples/`,
+Cargo uses underscores in filenames):
 
 ```bash
 arm-none-eabi-objcopy -O binary \
-    target/thumbv7em-none-eabihf/release/dual-motors \
-    dual-motors.bin
+    target/thumbv7em-none-eabihf/release/examples/dual_motors \
+    target/spike-usr_bins/dual_motors.bin
 ```
 
 ### 1.2 Upload & Run
@@ -59,9 +61,9 @@ Power on the hub and connect a terminal to `/dev/ttyACM0` (or
 
 ```bash
 # From the host:
-python3 ../../helper-tools/upload_demo.py dual-motors.bin
+python3 $PROJECT_ROOT/helper-tools/upload_demo.py dual_motors.bin
 # Or with the controller:
-python3 ../../helper-tools/spike_hub_controller.py upload dual-motors.bin
+python3 $PROJECT_ROOT/helper-tools/spike_hub_controller.py upload dual_motors.bin
 
 # In the hub shell:
 spike> bininfo
@@ -204,12 +206,44 @@ tag definitions and usage patterns.
 | `color-seeker`     | `examples/color_seeker.rs`       | v7+  | Rotational color scanner: motor_goto steps + classify |
 | `motor-goto`       | `examples/motor_goto.rs`         | v7+  | Closed-loop position control: goto 90°/0°/360°/0° |
 | `motor-sensor-test`| `examples/motor_sensor_test.rs`  | v7+  | Motor + sensor integration test |
+| `gdb-exercise`     | `examples/gdb_exercise.rs`       | v2+  | GDB debug target: fibonacci, color classify, motor ramp, LED cross |
+| `gdb-simple`       | `examples/gdb_simple.rs`         | v2+  | Minimal GDB test: tight loop for breakpoint/step testing |
 | `pwm-diag`         | `examples/pwm_diag.rs`           | v2+  | PWM diagnostics on motor ports |
 | `reg-dump`         | `examples/reg_dump.rs`           | v2+  | Hardware register inspection |
 | `sensor-dump`      | `examples/sensor_dump.rs`        | v3+  | Raw RGBI hex dump + ring buffer diagnostics |
 
 **Default port layout:** motors on ports **A** and **B**, color sensor
 on port **F**.
+
+### Debugging a Demo with GDB
+
+Build and debug `gdb_exercise` (or any demo) using the debug pipeline:
+
+```bash
+# Build
+cargo build --example gdb_exercise --release
+arm-none-eabi-objcopy -O binary \
+    target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
+    target/spike-usr_bins/gdb_exercise.bin
+
+# Upload + enter RSP mode (auto-detects port)
+python3 ../../helper-tools/debug_pipeline.py \
+    target/spike-usr_bins/gdb_exercise.bin
+
+# Connect GDB with symbols
+gdb-multiarch \
+    target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
+    -ex "set architecture arm" \
+    -ex "target remote /dev/ttyACM0"
+```
+
+VS Code: press **F5** — the workspace tasks automate the entire
+build → objcopy → upload → GDB attach cycle.
+
+See [USER\_MANUAL.md §2.8](../../USER_MANUAL.md#28-gdb-remote-debug)
+for full GDB usage and
+[dev\_notes/gdb-debugging.md](../../dev_notes/gdb-debugging.md) for
+the architecture.
 
 ---
 

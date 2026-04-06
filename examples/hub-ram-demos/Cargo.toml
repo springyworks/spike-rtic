@@ -12,6 +12,7 @@ Linked to 0x20040000 (SRAM2).
 """
 
 [workspace]
+exclude = ["xtask"]
 
 [dependencies]
 spike-hub-api = { path = "../../spike-hub-api" }

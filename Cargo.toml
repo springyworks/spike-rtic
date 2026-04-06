@@ -1,5 +1,5 @@
 [workspace]
-exclude = ["hub-ram-demos", "spike-hub-api", "xtask"]
+exclude = ["hub-ram-demos", "spike-hub-api", "xtask", "examples/hub-ram-demos/xtask"]
 
 [package]
 name = "spike-rtic"

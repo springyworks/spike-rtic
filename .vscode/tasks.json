@@ -2,148 +2,67 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
-			"label": "enter-rsp-mode",
-			"type": "shell",
-			"command": "python3",
-			"args": [
-				"${workspaceFolder}/helper-tools/enter_rsp.py"
-			],
-			"presentation": {
-				"reveal": "always",
-				"panel": "shared"
-			},
-			"problemMatcher": []
-		},
-		{
-			"label": "build-gdb-exercise",
+			"label": "xtask-debug-gdb-exercise",
 			"type": "shell",
 			"command": "cargo",
-			"args": [
-				"build",
-				"--example",
-				"gdb_exercise",
-				"--release"
-			],
-			"options": {
-				"cwd": "${workspaceFolder}/examples/hub-ram-demos"
-			},
-			"group": "build",
+			"args": ["run", "--", "debug", "gdb_exercise"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared" },
 			"problemMatcher": "$rustc"
 		},
 		{
-			"label": "objcopy-gdb-exercise",
+			"label": "xtask-debug-gdb-simple",
 			"type": "shell",
-			"command": "arm-none-eabi-objcopy",
-			"args": [
-				"-O",
-				"binary",
-				"target/thumbv7em-none-eabihf/release/examples/gdb_exercise",
-				"target/spike-usr_bins/gdb_exercise.bin"
-			],
-			"options": {
-				"cwd": "${workspaceFolder}/examples/hub-ram-demos"
-			},
-			"dependsOn": "build-gdb-exercise",
-			"problemMatcher": []
+			"command": "cargo",
+			"args": ["run", "--", "debug", "gdb_simple"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared" },
+			"problemMatcher": "$rustc"
 		},
 		{
-			"label": "upload-and-enter-rsp",
+			"label": "xtask-debug-pick",
 			"type": "shell",
-			"command": "python3",
-			"args": [
-				"${workspaceFolder}/helper-tools/debug_pipeline.py",
-				"${workspaceFolder}/examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin"
-			],
-			"presentation": {
-				"reveal": "always",
-				"panel": "shared"
-			},
-			"problemMatcher": []
+			"command": "cargo",
+			"args": ["run", "--", "debug", "${input:demoName}"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared" },
+			"problemMatcher": "$rustc"
 		},
 		{
-			"label": "debug-gdb-exercise",
-			"dependsOn": [
-				"objcopy-gdb-exercise",
-				"upload-and-enter-rsp"
-			],
-			"dependsOrder": "sequence",
-			"problemMatcher": []
+			"label": "xtask-upload",
+			"type": "shell",
+			"command": "cargo",
+			"args": ["run", "--", "upload", "${input:demoName}"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared" },
+			"problemMatcher": "$rustc"
 		},
 		{
-			"label": "upload-gdb-exercise",
+			"label": "xtask-build",
 			"type": "shell",
-			"command": "python3",
-			"args": [
-				"${workspaceFolder}/helper-tools/upload_demo.py",
-				"${workspaceFolder}/examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin"
-			],
-			"dependsOn": "objcopy-gdb-exercise",
-			"problemMatcher": []
+			"command": "cargo",
+			"args": ["run", "--", "build", "${input:demoName}"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"group": "build",
+			"presentation": { "reveal": "always", "panel": "shared" },
+			"problemMatcher": "$rustc"
 		},
 		{
 			"label": "build-firmware",
 			"type": "shell",
-			"command": "cd /home/rustuser/projects/rust/spike-rtic && cargo build --release 2>&1 | tail -40"
+			"command": "cd ${workspaceFolder} && cargo build --release 2>&1 | tail -40"
 		},
 		{
 			"label": "build-spike-rtic",
 			"type": "shell",
 			"command": "cargo build --release 2>&1"
-		},
+		}
+	],
+	"inputs": [
 		{
-			"label": "build-gdb-simple",
-			"type": "shell",
-			"command": "cargo",
-			"args": [
-				"build",
-				"--example",
-				"gdb_simple",
-				"--release"
-			],
-			"options": {
-				"cwd": "${workspaceFolder}/examples/hub-ram-demos"
-			},
-			"group": "build",
-			"problemMatcher": "$rustc"
-		},
-		{
-			"label": "objcopy-gdb-simple",
-			"type": "shell",
-			"command": "arm-none-eabi-objcopy",
-			"args": [
-				"-O",
-				"binary",
-				"target/thumbv7em-none-eabihf/release/examples/gdb_simple",
-				"target/spike-usr_bins/gdb_simple.bin"
-			],
-			"options": {
-				"cwd": "${workspaceFolder}/examples/hub-ram-demos"
-			},
-			"dependsOn": "build-gdb-simple",
-			"problemMatcher": []
-		},
-		{
-			"label": "upload-and-enter-rsp-simple",
-			"type": "shell",
-			"command": "python3",
-			"args": [
-				"${workspaceFolder}/helper-tools/debug_pipeline.py",
-				"${workspaceFolder}/examples/hub-ram-demos/target/spike-usr_bins/gdb_simple.bin"
-			],
-			"presentation": {
-				"reveal": "always",
-				"panel": "shared"
-			},
-			"problemMatcher": []
-		},
-		{
-			"label": "debug-gdb-simple",
-			"dependsOn": [
-				"objcopy-gdb-simple",
-				"upload-and-enter-rsp-simple"
-			],
-			"dependsOrder": "sequence",
-			"problemMatcher": []
+			"id": "demoName",
+			"type": "promptString",
+			"description": "Demo name (e.g. gdb_exercise, color_seeker, dual_motors)"
 		}
 	]
 }

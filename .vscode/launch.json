@@ -2,7 +2,52 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug gdb_exercise",
+            "name": "Debug gdb_exercise (LLDB)",
+            "type": "lldb",
+            "request": "custom",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise"
+            ],
+            "processCreateCommands": [
+                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+            ],
+            "sourceMap": {
+                "/": "/"
+            },
+            "preLaunchTask": "xtask-debug-gdb-exercise"
+        },
+        {
+            "name": "Debug gdb_simple (LLDB)",
+            "type": "lldb",
+            "request": "custom",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple"
+            ],
+            "processCreateCommands": [
+                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+            ],
+            "sourceMap": {
+                "/": "/"
+            },
+            "preLaunchTask": "xtask-debug-gdb-simple"
+        },
+        {
+            "name": "Debug demo (LLDB, pick name)",
+            "type": "lldb",
+            "request": "custom",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/${input:demoName}"
+            ],
+            "processCreateCommands": [
+                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+            ],
+            "sourceMap": {
+                "/": "/"
+            },
+            "preLaunchTask": "xtask-debug-pick"
+        },
+        {
+            "name": "Debug gdb_exercise (GDB)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise",
@@ -21,10 +66,10 @@
                 "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
                 "src": "${workspaceFolder}/examples/hub-ram-demos/src"
             },
-            "preLaunchTask": "debug-gdb-exercise"
+            "preLaunchTask": "xtask-debug-gdb-exercise"
         },
         {
-            "name": "Debug gdb_simple",
+            "name": "Debug gdb_simple (GDB)",
             "type": "cppdbg",
             "request": "launch",
             "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple",
@@ -43,7 +88,14 @@
                 "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
                 "src": "${workspaceFolder}/examples/hub-ram-demos/src"
             },
-            "preLaunchTask": "debug-gdb-simple"
+            "preLaunchTask": "xtask-debug-gdb-simple"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "demoName",
+            "type": "promptString",
+            "description": "Demo name (e.g. gdb_exercise, color_seeker, dual_motors)"
         }
     ]
 }

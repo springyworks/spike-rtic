@@ -7,3 +7,4 @@ rustflags = ["-C", "link-arg=--nmagic", "-C", "link-arg=-Tlink.x"]
 
 [alias]
 xtask = "run --manifest-path xtask/Cargo.toml --target x86_64-unknown-linux-gnu --"
+demo = "run --manifest-path examples/hub-ram-demos/xtask/Cargo.toml --target x86_64-unknown-linux-gnu --"

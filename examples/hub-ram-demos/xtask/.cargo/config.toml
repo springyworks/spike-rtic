@@ -1,0 +1,3 @@
+# Override parent's ARM target — xtask builds for the host
+[build]
+target = "x86_64-unknown-linux-gnu"

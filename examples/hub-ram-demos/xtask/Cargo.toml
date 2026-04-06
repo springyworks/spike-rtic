@@ -1,0 +1,10 @@
+[package]
+name = "demo-xtask"
+version = "0.1.0"
+edition = "2021"
+description = "Build, upload, and debug SPIKE hub RAM demos"
+
+[workspace]
+
+[dependencies]
+serialport = "4"

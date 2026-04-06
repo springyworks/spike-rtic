@@ -22,5 +22,9 @@
             "approve": true,
             "matchCommandLine": true
         }
-    }
+    },
+    "rust-analyzer.linkedProjects": [
+        "Cargo.toml",
+        "examples/hub-ram-demos/xtask/Cargo.toml"
+    ]
 }

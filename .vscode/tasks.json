@@ -53,6 +53,15 @@
 			"command": "cd ${workspaceFolder} && cargo build --release 2>&1 | tail -40"
 		},
 		{
+			"label": "free-port",
+			"type": "shell",
+			"command": "cargo",
+			"args": ["run", "--", "free-port"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared" },
+			"problemMatcher": []
+		},
+		{
 			"label": "build-spike-rtic",
 			"type": "shell",
 			"command": "cargo build --release 2>&1"

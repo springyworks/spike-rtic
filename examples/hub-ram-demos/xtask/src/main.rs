@@ -3,6 +3,15 @@
 //! Pure Rust replacement for the Python debug pipeline. Handles serial
 //! port detection, COBS upload, RSP mode entry, and symlink creation.
 //!
+//! ## Robustness features
+//!
+//! - **Auto port-free:** If another process (stale picocom, screen, Python
+//!   script) holds the serial port, we detect it via `fuser`/`lsof` and
+//!   kill it automatically before proceeding.
+//! - **State probing:** Before assuming what mode the hub is in, we send
+//!   safe probe bytes and classify the response as Shell, RSP/GDB, or
+//!   Unknown — then adapt the recovery sequence accordingly.
+//!
 //! # Usage
 //!
 //! ```text
@@ -11,6 +20,7 @@
 //! cargo xtask upload <name>    Build + upload + go (no RSP)
 //! cargo xtask list             List available demos
 //! cargo xtask port             Show detected hub serial port
+//! cargo xtask free-port        Kill any process blocking the hub serial port
 //! ```
 //!
 //! The `debug` command is designed as a VS Code preLaunchTask — it exits
@@ -21,7 +31,7 @@ use std::env;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{exit, Command};
+use std::process::{exit, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const LEGO_VID: u16 = 0x0694;
@@ -47,6 +57,7 @@ fn main() {
         Some("upload") => cmd_upload(&args[1..]),
         Some("list") => cmd_list(),
         Some("port") => cmd_port(),
+        Some("free-port") => cmd_free_port(),
         Some("-h") | Some("--help") => usage(),
         _ => usage(),
     }
@@ -62,8 +73,251 @@ fn usage() {
     eprintln!("  {CYAN}upload{RESET} <name>   Build → objcopy → upload → go (run demo)");
     eprintln!("  {CYAN}list{RESET}            List available demo names");
     eprintln!("  {CYAN}port{RESET}            Show detected hub serial port");
+    eprintln!("  {CYAN}free-port{RESET}       Kill processes blocking the hub serial port");
     eprintln!();
     eprintln!("The debug command creates {SYMLINK} → serial port for GDB/LLDB.");
+    eprintln!("Port locks are resolved automatically (fuser/lsof + SIGTERM/SIGKILL).");
+}
+
+// ── Port-conflict resolution ────────────────────────────────
+
+/// Find PIDs that have `port` open, via fuser then lsof fallback.
+fn find_port_users(port: &str) -> Vec<(u32, String)> {
+    let my_pid = std::process::id();
+    let mut users = Vec::new();
+
+    // Try fuser first
+    if let Ok(out) = Command::new("fuser")
+        .arg(port)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for tok in text.split_whitespace() {
+            let clean = tok.trim_end_matches('m').trim_end_matches('e');
+            if let Ok(pid) = clean.parse::<u32>() {
+                if pid != my_pid {
+                    users.push((pid, pid_cmdline(pid)));
+                }
+            }
+        }
+    }
+
+    if !users.is_empty() {
+        return users;
+    }
+
+    // Fallback: lsof
+    if let Ok(out) = Command::new("lsof")
+        .args(["-t", port])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Ok(pid) = line.trim().parse::<u32>() {
+                if pid != my_pid {
+                    users.push((pid, pid_cmdline(pid)));
+                }
+            }
+        }
+    }
+
+    users
+}
+
+/// Read /proc/<pid>/cmdline for display.
+fn pid_cmdline(pid: u32) -> String {
+    fs::read(format!("/proc/{pid}/cmdline"))
+        .map(|raw| {
+            raw.iter()
+                .map(|&b| if b == 0 { b' ' } else { b })
+                .collect::<Vec<u8>>()
+        })
+        .map(|v| String::from_utf8_lossy(&v).trim().to_string())
+        .unwrap_or_else(|_| "?".into())
+}
+
+/// Kill processes blocking `port`. Returns true if port is now free.
+fn kill_port_users(port: &str) -> bool {
+    let users = find_port_users(port);
+    if users.is_empty() {
+        return true;
+    }
+
+    eprintln!("{YELLOW}Port {port} is locked by:{RESET}");
+    for (pid, cmd) in &users {
+        let short: String = cmd.chars().take(70).collect();
+        eprintln!("  PID {pid}: {short}");
+    }
+
+    // SIGTERM first
+    for (pid, _) in &users {
+        eprintln!("  {DIM}Sending SIGTERM to PID {pid}{RESET}");
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+    std::thread::sleep(Duration::from_millis(800));
+
+    // Check survivors → SIGKILL
+    let remaining = find_port_users(port);
+    if !remaining.is_empty() {
+        for (pid, _) in &remaining {
+            eprintln!("  {DIM}Sending SIGKILL to PID {pid}{RESET}");
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    let still = find_port_users(port);
+    if still.is_empty() {
+        eprintln!("{GREEN}✓{RESET} Port {port} freed");
+        true
+    } else {
+        eprintln!("{RED}✗{RESET} Could not free {port}");
+        false
+    }
+}
+
+/// Ensure port is not locked. Auto-kills blockers. Dies on failure.
+fn ensure_port_free(port: &str) {
+    if find_port_users(port).is_empty() {
+        return;
+    }
+    if !kill_port_users(port) {
+        die(&format!("Cannot free {port} — close the blocking process manually"));
+    }
+    // Small settle time after kill
+    std::thread::sleep(Duration::from_millis(300));
+}
+
+// ── Hub mode probing ────────────────────────────────────────
+
+#[derive(Debug, PartialEq)]
+enum HubMode {
+    Shell,   // spike> prompt is responding
+    Rsp,     // GDB RSP mode (responds to $? packets)
+    Unknown, // port open but can't classify
+}
+
+/// Probe what mode the hub is in by sending safe bytes and reading response.
+fn probe_hub_mode(serial: &mut Box<dyn SerialPort>) -> HubMode {
+    // Drain any stale data first
+    drain(serial);
+
+    // 1. Try a safe RSP packet: $?#3f  (status query)
+    let _ = serial.write_all(b"$?#3f");
+    let _ = serial.flush();
+    let resp = read_until_timeout(serial, Duration::from_millis(600));
+    if resp.contains('$') || resp.contains('+') {
+        // RSP mode — got a GDB RSP response
+        return HubMode::Rsp;
+    }
+
+    // 2. Drain leftover, try shell: send empty line, look for spike>
+    drain(serial);
+    send_line(serial, "");
+    let resp = read_until_timeout(serial, Duration::from_millis(800));
+    if resp.contains("spike>") {
+        return HubMode::Shell;
+    }
+
+    // 3. Try once more with slight delay (hub might be mid-boot)
+    std::thread::sleep(Duration::from_millis(500));
+    send_line(serial, "");
+    let resp = read_until_timeout(serial, Duration::from_secs(3));
+    if resp.contains("spike>") {
+        return HubMode::Shell;
+    }
+
+    HubMode::Unknown
+}
+
+/// Read whatever comes back within `timeout`, return as string.
+/// Returns early once data has been received and an idle gap (no new
+/// data for 80ms) is detected — avoids waiting the full timeout when
+/// the hub has already finished sending.
+fn read_until_timeout(serial: &mut Box<dyn SerialPort>, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    let mut buf = [0u8; 512];
+    let mut acc = Vec::new();
+    let mut idle_since: Option<Instant> = None;
+    while Instant::now() < deadline {
+        match serial.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                acc.extend_from_slice(&buf[..n]);
+                idle_since = None; // reset idle timer
+            }
+            _ => {
+                if !acc.is_empty() {
+                    // Data was received before — start/continue idle timer
+                    let now = Instant::now();
+                    match idle_since {
+                        None => idle_since = Some(now),
+                        Some(t) if now.duration_since(t) > Duration::from_millis(80) => break,
+                        _ => {}
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    String::from_utf8_lossy(&acc).into_owned()
+}
+
+/// Transition hub to shell mode from whatever state it's in.
+fn ensure_shell_mode(serial: &mut Box<dyn SerialPort>) {
+    let mode = probe_hub_mode(serial);
+    match mode {
+        HubMode::Shell => {
+            eprintln!("  {GREEN}✓{RESET} Hub is in shell mode");
+        }
+        HubMode::Rsp => {
+            eprintln!("  {YELLOW}Hub is in RSP/GDB mode — sending detach...{RESET}");
+            let _ = serial.write_all(b"$D#44");
+            let _ = serial.flush();
+            std::thread::sleep(Duration::from_millis(200));
+            drain(serial);
+            // Now try shell
+            send_line(serial, "");
+            let resp = read_until(serial, "spike>", Duration::from_secs(5));
+            if !resp.contains("spike>") {
+                die("Hub did not return to shell after RSP detach");
+            }
+            eprintln!("  {GREEN}✓{RESET} Recovered to shell mode");
+        }
+        HubMode::Unknown => {
+            eprintln!("  {YELLOW}Hub mode unknown — trying full recovery...{RESET}");
+            // Shotgun approach: Ctrl-C, RSP detach, stop, empty line
+            let _ = serial.write_all(b"\x03");
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = serial.write_all(b"$D#44");
+            let _ = serial.flush();
+            std::thread::sleep(Duration::from_millis(500));
+            drain(serial);
+            send_line(serial, "stop");
+            drain_for(serial, Duration::from_millis(300));
+            send_line(serial, "");
+            let resp = read_until(serial, "spike>", Duration::from_secs(8));
+            if !resp.contains("spike>") {
+                // Last resort: wait for boot
+                eprintln!("  {YELLOW}Waiting for hub boot...{RESET}");
+                std::thread::sleep(Duration::from_secs(3));
+                drain(serial);
+                send_line(serial, "");
+                let resp2 = read_until(serial, "spike>", Duration::from_secs(8));
+                if !resp2.contains("spike>") {
+                    die(&format!("Cannot reach shell mode. Got: {:?}", resp2));
+                }
+            }
+            eprintln!("  {GREEN}✓{RESET} Recovered to shell mode");
+        }
+    }
 }
 
 // ── Commands ────────────────────────────────────────────────
@@ -72,40 +326,56 @@ fn cmd_debug(args: &[String]) {
     let name = require_demo_name(args);
     let root = demo_root();
 
+    // 1. Build first (no port needed yet)
     let bin_path = build_and_objcopy(&root, &name);
+
+    // 2. Find hub port
     let port = find_hub_port_or_die();
 
+    // 3. Ensure port is free (auto-kill blockers)
+    ensure_port_free(&port);
+
+    // 4. Open serial
     eprintln!("{BOLD}Uploading & entering RSP mode...{RESET}");
-    let mut serial = open_serial(&port);
+    let mut serial = open_serial_robust(&port);
 
-    // Try detaching from stale RSP session
-    recover_from_stale_state(&mut serial);
+    // 5. Probe hub state and get to shell mode
+    ensure_shell_mode(&mut serial);
 
-    // Wait for shell prompt
-    wait_for_prompt(&mut serial, 8);
-
-    // Kill any running demo
+    // 6. Stop any running demo
     send_line(&mut serial, "stop");
     drain_for(&mut serial, Duration::from_millis(300));
 
-    // Upload
+    // 7. Upload
     let bin_data = fs::read(&bin_path).unwrap_or_else(|e| {
         die(&format!("Cannot read {}: {e}", bin_path.display()));
     });
+    // Bump timeout for upload protocol (needs longer reads)
+    let _ = serial.set_timeout(Duration::from_secs(2));
     upload_binary(&mut serial, &bin_data);
+    // Restore fast timeout
+    let _ = serial.set_timeout(Duration::from_millis(100));
 
-    // Start demo
+    // 8. Start demo
     send_line(&mut serial, "go");
     drain_for(&mut serial, Duration::from_millis(300));
 
-    // Enter GDB RSP mode
+    // 9. Enter GDB RSP mode
     send_line(&mut serial, "gdb");
-    drain_for(&mut serial, Duration::from_millis(300));
+    // Wait for GDB greeting — confirms the stub is active.
+    let greeting = read_until(&mut serial, "exit GDB mode", Duration::from_secs(2));
+    if !greeting.contains("GDB stub active") {
+        eprintln!("{YELLOW}Warning: GDB greeting not seen — proceeding anyway{RESET}");
+    }
+    // Final drain: consume any trailing bytes after the greeting
+    drain_for(&mut serial, Duration::from_millis(200));
+    // Flush kernel serial buffers so GDB starts with a clean slate
+    let _ = serial.clear(serialport::ClearBuffer::All);
 
-    // Release port
+    // 10. Release port for GDB/LLDB
     drop(serial);
 
-    // Create stable symlink
+    // 11. Create stable symlink
     create_symlink(&port);
 
     let elf = elf_path(&root, &name);
@@ -133,9 +403,11 @@ fn cmd_upload(args: &[String]) {
     let bin_path = build_and_objcopy(&root, &name);
     let port = find_hub_port_or_die();
 
-    let mut serial = open_serial(&port);
-    recover_from_stale_state(&mut serial);
-    wait_for_prompt(&mut serial, 8);
+    // Auto-free port
+    ensure_port_free(&port);
+
+    let mut serial = open_serial_robust(&port);
+    ensure_shell_mode(&mut serial);
     send_line(&mut serial, "stop");
     drain_for(&mut serial, Duration::from_millis(300));
 
@@ -146,6 +418,51 @@ fn cmd_upload(args: &[String]) {
 
     send_line(&mut serial, "go");
     eprintln!("{GREEN}✓{RESET} Demo '{name}' running on {port}");
+}
+
+fn cmd_free_port() {
+    match find_hub_port() {
+        Some(port) => {
+            let users = find_port_users(&port);
+            if users.is_empty() {
+                eprintln!("{GREEN}✓{RESET} {port} is free (no blocking processes)");
+            } else {
+                kill_port_users(&port);
+            }
+        }
+        None => {
+            // No hub found via VID:PID — try all ttyACM ports
+            let mut found_any = false;
+            if let Ok(entries) = fs::read_dir("/dev") {
+                let mut ports: Vec<String> = entries
+                    .flatten()
+                    .filter_map(|e| {
+                        let n = e.file_name().to_string_lossy().to_string();
+                        if n.starts_with("ttyACM") {
+                            Some(format!("/dev/{n}"))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                ports.sort();
+                for port in &ports {
+                    let users = find_port_users(port);
+                    if !users.is_empty() {
+                        found_any = true;
+                        kill_port_users(port);
+                    }
+                }
+                if !found_any {
+                    if ports.is_empty() {
+                        eprintln!("{YELLOW}No ttyACM ports found{RESET}");
+                    } else {
+                        eprintln!("{GREEN}✓{RESET} All ttyACM ports are free");
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn cmd_list() {
@@ -313,31 +630,36 @@ fn find_hub_port_or_die() -> String {
 
 // ── Serial communication ────────────────────────────────────
 
-fn open_serial(port: &str) -> Box<dyn SerialPort> {
-    serialport::new(port, BAUD)
-        .timeout(Duration::from_secs(2))
+/// Open serial port with automatic port-free retry.
+/// Uses 100ms timeout — fast for probing and draining.  Callers that
+/// need longer reads (upload protocol) bump it temporarily.
+fn open_serial_robust(port: &str) -> Box<dyn SerialPort> {
+    let timeout = Duration::from_millis(100);
+    // First attempt
+    match serialport::new(port, BAUD)
+        .timeout(timeout)
         .open()
-        .unwrap_or_else(|e| {
+    {
+        Ok(s) => return s,
+        Err(e) => {
+            let msg = format!("{e}");
+            if msg.contains("lock") || msg.contains("busy") || msg.contains("denied") {
+                eprintln!("{YELLOW}Port locked — auto-freeing {port}...{RESET}");
+                if !kill_port_users(port) {
+                    die(&format!("Cannot free {port}"));
+                }
+                std::thread::sleep(Duration::from_millis(500));
+                // Retry
+                return serialport::new(port, BAUD)
+                    .timeout(timeout)
+                    .open()
+                    .unwrap_or_else(|e2| {
+                        die(&format!("Cannot open {port} after freeing: {e2}"));
+                    });
+            }
             die(&format!("Cannot open {port}: {e}"));
-        })
-}
-
-/// Try to recover from stale RSP mode or stuck state.
-fn recover_from_stale_state(serial: &mut Box<dyn SerialPort>) {
-    // Send RSP detach in case hub is stuck in GDB mode
-    let _ = serial.write_all(b"$D#44");
-    let _ = serial.flush();
-    std::thread::sleep(Duration::from_millis(500));
-    drain(serial);
-
-    // Send Ctrl-C + stop in case a demo is running
-    let _ = serial.write_all(b"\x03");
-    std::thread::sleep(Duration::from_millis(100));
-    send_line(serial, "stop");
-    drain_for(serial, Duration::from_millis(300));
-
-    // Poke for prompt
-    send_line(serial, "");
+        }
+    }
 }
 
 fn send_line(serial: &mut Box<dyn SerialPort>, cmd: &str) {
@@ -390,20 +712,7 @@ fn read_until(serial: &mut Box<dyn SerialPort>, needle: &str, timeout: Duration)
     String::from_utf8_lossy(&acc).into_owned()
 }
 
-fn wait_for_prompt(serial: &mut Box<dyn SerialPort>, timeout_secs: u64) {
-    let text = read_until(serial, "spike>", Duration::from_secs(timeout_secs));
-    if !text.contains("spike>") {
-        // Retry once — hub might be mid-boot
-        eprintln!("{YELLOW}Waiting for hub boot...{RESET}");
-        std::thread::sleep(Duration::from_secs(2));
-        drain(serial);
-        send_line(serial, "");
-        let text2 = read_until(serial, "spike>", Duration::from_secs(timeout_secs));
-        if !text2.contains("spike>") {
-            die(&format!("No spike> prompt. Got: {text2:?}"));
-        }
-    }
-}
+
 
 // ── COBS upload protocol ────────────────────────────────────
 

@@ -215,35 +215,47 @@ tag definitions and usage patterns.
 **Default port layout:** motors on ports **A** and **B**, color sensor
 on port **F**.
 
-### Debugging a Demo with GDB
+### Debugging a Demo with GDB or LLDB
 
-Build and debug `gdb_exercise` (or any demo) using the debug pipeline:
+> **Status: alpha** — registers, memory, software breakpoints,
+> watchpoints, continue, step, halt, and detach all work with both
+> GDB and LLDB.
+
+The easiest path is **VS Code F5** — the xtask preLaunchTask handles
+build → upload → RSP entry automatically:
+
+1. Open the Run & Debug panel (Ctrl+Shift+D)
+2. Pick **"Debug demo (LLDB)"** or **"Debug demo (GDB)"**
+3. Enter the demo name (e.g. `gdb_simple`)
+4. Press F5 — xtask builds, uploads, enters RSP, and the debugger connects
+
+Quick-launch configs (no name prompt) exist for `gdb_simple` and `gdb_exercise`.
+
+**Manual (CLI):**
 
 ```bash
-# Build
-cargo build --example gdb_exercise --release
-arm-none-eabi-objcopy -O binary \
-    target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
-    target/spike-usr_bins/gdb_exercise.bin
+# Terminal 1: build + upload + enter RSP
+cd examples/hub-ram-demos/xtask
+cargo run -- debug gdb_simple
 
-# Upload + enter RSP mode (auto-detects port)
-python3 ../../helper-tools/debug_pipeline.py \
-    target/spike-usr_bins/gdb_exercise.bin
-
-# Connect GDB with symbols
+# Terminal 2a: connect GDB
 gdb-multiarch \
-    target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
-    -ex "set architecture arm" \
-    -ex "target remote /dev/ttyACM0"
+    ../target/thumbv7em-none-eabihf/release/examples/gdb_simple \
+    -ex "set serial baud 115200" \
+    -ex "target remote /tmp/spike-hub"
+
+# Terminal 2b: OR connect LLDB
+lldb \
+    -o "target create ../target/thumbv7em-none-eabihf/release/examples/gdb_simple" \
+    -o "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
 ```
 
-VS Code: press **F5** — the workspace tasks automate the entire
-build → objcopy → upload → GDB attach cycle.
+The `.vscode/launch.json` and `.vscode/tasks.json` files are committed
+to the repo — clone and go.
 
-See [USER\_MANUAL.md §2.8](../../USER_MANUAL.md#28-gdb-remote-debug)
-for full GDB usage and
-[dev\_notes/gdb-debugging.md](../../dev_notes/gdb-debugging.md) for
-the architecture.
+See [dev\_notes/gdb-debugging.md](../../dev_notes/gdb-debugging.md) for
+the full architecture and [USER\_MANUAL.md §2.8](../../USER_MANUAL.md#28-gdb-remote-debug)
+for GDB usage.
 
 ---
 

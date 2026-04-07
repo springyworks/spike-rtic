@@ -1,8 +1,13 @@
-# GDB Remote Debugging — Architecture & Lessons Learned
+# GDB / LLDB Remote Debugging — Architecture & Lessons Learned
 
-Self-hosted GDB debugging over USB CDC serial — no JTAG, no SWD,
+Self-hosted debugging over USB CDC serial — no JTAG, no SWD,
 no external debug probe.  The hub acts as both target and debug
-server simultaneously.
+server simultaneously.  Works with **gdb-multiarch** (cppdbg) and
+**LLDB** (CodeLLDB) in VS Code.
+
+> **Status: alpha** — register read, memory read/write, software
+> breakpoints, watchpoints, continue, step, halt, and detach all
+> work.  No FPU regs, no thread awareness.
 
 ---
 
@@ -15,21 +20,24 @@ The debug stack has three layers:
    a WFE loop for GDB to inspect and resume.
 2. **GDB RSP stub** (`gdb_rsp.rs`) — Parses GDB Remote Serial Protocol
    packets over USB CDC, translates them into register/memory reads,
-   watchpoint configuration, and DebugMonitor control.
-3. **Pipeline tools** (`debug_pipeline.py`, `enter_rsp.py`) — Python
-   scripts that upload the demo, enter RSP mode, and release the port
-   for GDB.
+   watchpoint configuration, and DebugMonitor control.  Supports both
+   GDB and LLDB protocols (vCont, QStartNoAckMode, sequential register
+   numbering).
+3. **Pipeline tool** (`examples/hub-ram-demos/xtask/`) — Rust xtask
+   that builds, objcopy's, uploads the demo, enters RSP mode, and
+   releases the port for GDB/LLDB.  Auto-kills port-blocking processes
+   and adapts to any hub state (shell, RSP, unknown).
 
 ```
-┌─────────────────────────────────────────────────┐
-│   GDB (host)         gdb-multiarch               │
+┌───────────────────────────────────────────────────┐
+│   GDB/LLDB (host)    gdb-multiarch or CodeLLDB    │
 │     ↕ RSP packets over USB CDC serial             │
 │   Shell (hub)        shell.rs routes to gdb_rsp   │
 │     ↕ register/memory reads, DWT config           │
 │   DebugMonitor (hub) dwt.rs exception handler     │
 │     ↕ WFE halt / resume / single-step             │
 │   Demo (hub)         SRAM2 user code              │
-└─────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────┘
 ```
 
 ---
@@ -130,26 +138,35 @@ GDB side (`gdb_rsp.rs`):
 
 ### Automated (VS Code F5)
 
-`tasks.json` defines a dependency chain:
-1. `build-gdb-exercise` — cargo build
-2. `objcopy-gdb-exercise` — extract .bin
-3. `upload-and-enter-rsp` — `debug_pipeline.py` uploads, sends `go` +
-   `gdb`, releases port
-4. `launch.json` cppdbg config connects to `/tmp/spike-hub`
+The Rust xtask handles the full pipeline as a VS Code preLaunchTask:
+1. `xtask debug <name>` — build + objcopy + upload + go + enter RSP
+2. Creates `/tmp/spike-hub` symlink → actual serial port
+3. `launch.json` connects GDB or LLDB to the symlink
+
+Two generic launch configs work for **any** demo:
+- **"Debug demo (LLDB)"** — CodeLLDB; uses `process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200`
+- **"Debug demo (GDB)"** — cppdbg/gdb-multiarch; uses `target remote /tmp/spike-hub`
+
+Both prompt for the demo name (e.g. `gdb_simple`, `color_seeker`).
+Quick-launch configs (no prompt) exist for `gdb_simple` and `gdb_exercise`.
 
 ### Manual (two terminals)
 
 ```bash
-# Terminal 1: upload + enter RSP
-python3 helper-tools/debug_pipeline.py \
-    examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin \
-    /dev/ttyACM0
+# Terminal 1: build + upload + enter RSP
+cd examples/hub-ram-demos/xtask
+cargo run -- debug gdb_simple
 
-# Terminal 2: connect GDB
+# Terminal 2a: connect GDB
 gdb-multiarch \
-    examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
-    -ex "set architecture arm" \
-    -ex "target remote /dev/ttyACM0"
+    ../target/thumbv7em-none-eabihf/release/examples/gdb_simple \
+    -ex "set serial baud 115200" \
+    -ex "target remote /tmp/spike-hub"
+
+# Terminal 2b: OR connect LLDB
+lldb \
+    -o "target create ../target/thumbv7em-none-eabihf/release/examples/gdb_simple" \
+    -o "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
 ```
 
 ### GDB commands that work
@@ -164,9 +181,20 @@ watch *(uint32_t*)ADDR   # DWT write watchpoint
 detach                   # clean exit → hub returns to shell
 ```
 
+### LLDB commands that work
+
+```lldb
+register read            # r0-r15, xpsr (all 17 registers)
+memory read 0x20040000 0x20040020
+bt                       # backtrace
+continue                 # resume
+process interrupt        # halt
+process detach           # clean exit
+```
+
 ---
 
-## Verified Test Session (2025-07-01)
+## Verified Test Session — GDB (2025-07-01)
 
 Full clean cycle with no crashes:
 
@@ -180,14 +208,66 @@ Full clean cycle with no crashes:
 8. `quit` → detach → hub back at `spike>` shell
 9. No watchdog crash, no corruption.
 
+## Verified Test Session — LLDB (2026-04-07)
+
+Full clean cycle with CodeLLDB (lldb-18) — batch mode:
+
+1. `xtask debug gdb_simple` → build + upload + RSP (~3 seconds)
+2. `lldb -b -s test.txt` → `process connect serial:///dev/ttyACM0?baud=115200`
+3. `register read` → all 17 registers (r0-r15 + xpsr) with valid values
+4. `memory read` → 32 bytes from SRAM at 0x20000000
+5. `bt` → backtrace with frame #0
+6. `process detach` → "Process 1 detached" → clean exit
+7. Hub returned to shell mode, no watchdog crash.
+8. Also tested via VS Code GUI (CodeLLDB extension) — source-level
+   display with green line indicator working.
+
+---
+
+## LLDB / CodeLLDB Compatibility
+
+The RSP stub supports LLDB in addition to GDB.  Key differences handled:
+
+| Feature | GDB | LLDB | Stub support |
+|---------|-----|------|--------------|
+| Register numbering | regnum="25" for cpsr | Sequential 0–16 | Both accepted (p handler checks 16 AND 25) |
+| Continue | `c` | `vCont;c` | Both handled identically |
+| Single step | `s` | `vCont;s` | Both handled |
+| No-ack mode | Not used | `QStartNoAckMode` | Supported — suppresses +/- |
+| Memory reads | Small | Up to 512 bytes | Capped to 260 bytes (stack buffer) |
+
+qSupported advertises: `PacketSize=1024;swbreak+;hwbreak+;qXfer:features:read+;QStartNoAckMode+;vContSupported+`
+
+TARGET_XML uses sequential register numbering (0–16, no gaps) which
+satisfies both GDB and LLDB.
+
+---
+
+## Lessons Learned — Buffer Sizes
+
+**Memory read overflow (caught 2026-04-07):** The `m` (memory read)
+packet handler had a stack buffer of 520 bytes (260 data bytes × 2
+hex chars).  But `max_bytes` was calculated from `RESP_BUF_SIZE`
+(1024), allowing up to 507 bytes — LLDB's `m addr,200` (512 bytes)
+overflowed the stack buffer → HardFault → watchdog reset.
+
+**Fix:** Cap `max_bytes` by `buf.len() / 2` — always bounded by the
+actual stack buffer, not the response buffer.
+
+**Rule:** In ISR context, stack space is precious.  Always size your
+cap from the actual buffer, not from an unrelated constant.
+
 ---
 
 ## Known Limitations
 
+- **Alpha status** — works for interactive debugging but may have edge
+  cases.  Tested with GDB 13 and LLDB 18.
 - **FPB covers Flash only** — FPBv1 range is 0x0000_0000–0x1FFF_FFFF.
   SRAM2 demos run at 0x2004_xxxx, outside FPB range.  Software
   breakpoints (BKPT instruction patching) work in SRAM2 instead.
-- **No thread awareness** — GDB sees one "thread" (the DebugMonitor
+- **No FPU registers** — only r0-r15 + xPSR.  No s0-s31/d0-d15.
+- **No thread awareness** — GDB/LLDB sees one "thread" (the DebugMonitor
   context).  RTIC tasks are not exposed as separate threads.
 - **Register snapshot is from exception entry** — r0-r12 come from the
   stacked frame at the moment DebugMonitor fired, not from arbitrary
@@ -197,3 +277,6 @@ Full clean cycle with no crashes:
 - **Single serial port** — GDB and the shell share USB CDC.  The shell
   routes bytes to the RSP parser when in GDB mode.  You can't use
   picocom and GDB simultaneously.
+- **Memory read capped at 260 bytes** — per-packet limit to avoid
+  stack overflow in ISR context.  GDB/LLDB transparently split larger
+  reads into multiple packets.

@@ -1,38 +1,11 @@
 {
+    // NOTE: "request": "custom" warnings are false positives — it's a valid
+    // CodeLLDB extension value for raw target/process commands.
     "version": "0.2.0",
     "configurations": [
+        // ── Generic: works for ANY demo in examples/hub-ram-demos/examples/ ──
         {
-            "name": "Debug gdb_exercise (LLDB)",
-            "type": "lldb",
-            "request": "custom",
-            "targetCreateCommands": [
-                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise"
-            ],
-            "processCreateCommands": [
-                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
-            ],
-            "sourceMap": {
-                "/": "/"
-            },
-            "preLaunchTask": "xtask-debug-gdb-exercise"
-        },
-        {
-            "name": "Debug gdb_simple (LLDB)",
-            "type": "lldb",
-            "request": "custom",
-            "targetCreateCommands": [
-                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple"
-            ],
-            "processCreateCommands": [
-                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
-            ],
-            "sourceMap": {
-                "/": "/"
-            },
-            "preLaunchTask": "xtask-debug-gdb-simple"
-        },
-        {
-            "name": "Debug demo (LLDB, pick name)",
+            "name": "Debug demo (LLDB)",
             "type": "lldb",
             "request": "custom",
             "targetCreateCommands": [
@@ -47,55 +20,65 @@
             "preLaunchTask": "xtask-debug-pick"
         },
         {
-            "name": "Debug gdb_exercise (GDB)",
+            "name": "Debug demo (GDB)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise",
+            "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/${input:demoName}",
             "cwd": "${workspaceFolder}",
             "MIMode": "gdb",
             "miDebuggerPath": "/usr/bin/gdb-multiarch",
-            "miDebuggerServerAddress": "/tmp/spike-hub",
             "stopAtEntry": false,
             "setupCommands": [
                 { "text": "set remotetimeout 10" },
+                { "text": "set serial baud 115200" },
                 { "text": "set mem inaccessible-by-default off" },
                 { "text": "set architecture arm" },
-                { "text": "set arm force-mode thumb" }
+                { "text": "set arm force-mode thumb" },
+                { "text": "target remote /tmp/spike-hub" }
             ],
             "sourceFileMap": {
                 "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
                 "src": "${workspaceFolder}/examples/hub-ram-demos/src"
             },
-            "preLaunchTask": "xtask-debug-gdb-exercise"
+            "preLaunchTask": "xtask-debug-pick"
         },
+        // ── Quick-launch shortcuts (no prompt, just F5) ──
         {
-            "name": "Debug gdb_simple (GDB)",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple",
-            "cwd": "${workspaceFolder}",
-            "MIMode": "gdb",
-            "miDebuggerPath": "/usr/bin/gdb-multiarch",
-            "miDebuggerServerAddress": "/tmp/spike-hub",
-            "stopAtEntry": false,
-            "setupCommands": [
-                { "text": "set remotetimeout 10" },
-                { "text": "set mem inaccessible-by-default off" },
-                { "text": "set architecture arm" },
-                { "text": "set arm force-mode thumb" }
+            "name": "Quick: gdb_simple (LLDB)",
+            "type": "lldb",
+            "request": "custom",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple"
             ],
-            "sourceFileMap": {
-                "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
-                "src": "${workspaceFolder}/examples/hub-ram-demos/src"
+            "processCreateCommands": [
+                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+            ],
+            "sourceMap": {
+                "/": "/"
             },
             "preLaunchTask": "xtask-debug-gdb-simple"
+        },
+        {
+            "name": "Quick: gdb_exercise (LLDB)",
+            "type": "lldb",
+            "request": "custom",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise"
+            ],
+            "processCreateCommands": [
+                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+            ],
+            "sourceMap": {
+                "/": "/"
+            },
+            "preLaunchTask": "xtask-debug-gdb-exercise"
         }
     ],
     "inputs": [
         {
             "id": "demoName",
             "type": "promptString",
-            "description": "Demo name (e.g. gdb_exercise, color_seeker, dual_motors)"
+            "description": "Demo name (e.g. gdb_simple, gdb_exercise, color_seeker, dual_motors)"
         }
     ]
 }

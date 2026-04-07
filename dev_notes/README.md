@@ -15,7 +15,7 @@ Guide to all documentation in this folder. Files categorized by role and freshne
 | File | Topic | Notes |
 | --- | --- | --- |
 | [sensor-fixes.md](sensor-fixes.md) | LUMP keepalive, chunked delay, mode-switch arch, flash, motor PWM confirmed | **Golden source** — validated findings and working fixes |
-| [gdb-debugging.md](gdb-debugging.md) | GDB RSP architecture, DebugMonitor priority, trampoline, GDB\_ACTIVE guard, workflow | **NEW** — full GDB debug stack design and lessons learned |
+| [gdb-debugging.md](gdb-debugging.md) | GDB/LLDB RSP architecture, DebugMonitor priority, trampoline, GDB\_ACTIVE guard, LLDB compat, xtask workflow | Full debug stack design — alpha, GDB + CodeLLDB tested |
 | [sensor-power-requirements.md](sensor-power-requirements.md) | Extra PWM-like power for some peripherals | **NEW** — some LEGO parts need power pin activation |
 | [motor-encoder-mechanism.md](motor-encoder-mechanism.md) | Motor position = LUMP UART, not quadrature | Short, factual, important for anyone asking "where does encoder data come from?" |
 | [motor-position-controller.md](motor-position-controller.md) | Ramp+nudge controller design, tunable parameters, test results | Documents our implemented `motor_goto` controller |

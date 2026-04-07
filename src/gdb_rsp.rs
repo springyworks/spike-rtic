@@ -90,6 +90,10 @@ pub struct GdbStub {
     rx_sum: u8,
     /// parser state.
     state: RxState,
+    /// True when the current packet has overflowed PKT_BUF_SIZE.
+    /// Overflow packets are NAK'd even if the checksum is correct,
+    /// because the data is truncated and dispatch would be wrong.
+    pkt_overflow: bool,
     /// True while we are in GDB mode (shell routes bytes here).
     pub active: bool,
     /// Set true when a DebugMonitor hit is detected but not yet reported.
@@ -103,6 +107,8 @@ pub struct GdbStub {
     /// Set when continuing past a software breakpoint: the single-step
     /// halt should re-patch the BKPT and auto-continue (not report to GDB).
     step_then_continue: bool,
+    /// No-ack mode (QStartNoAckMode): suppress +/- ACK/NAK.
+    no_ack: bool,
 }
 
 impl GdbStub {
@@ -112,11 +118,13 @@ impl GdbStub {
             pkt_len: 0,
             rx_sum: 0,
             state: RxState::Idle,
+            pkt_overflow: false,
             active: false,
             pending_stop: false,
             last_debugmon: 0,
             target_running: false,
             step_then_continue: false,
+            no_ack: false,
         }
     }
 
@@ -130,15 +138,17 @@ impl GdbStub {
         self.active = true;
         self.state = RxState::Idle;
         self.pkt_len = 0;
+        self.pkt_overflow = false;
         self.pending_stop = true; // report halt to first `?`
         self.last_debugmon = dwt::debugmon_count();
         self.target_running = false;
         self.step_then_continue = false;
+        self.no_ack = false;
         // Halt the demo: pend DebugMonitor so it fires on return to
         // Thread mode (where sandboxed demos run).
         dwt::set_gdb_active(true);
         dwt::pend_debugmon();
-        b"GDB stub active. Connect with:\r\n  arm-none-eabi-gdb -ex \"target remote /dev/ttyACM0\"\r\nType Ctrl-C three times rapidly to exit GDB mode.\r\n"
+        b"GDB stub active. Connect with:\r\n  arm-none-eabi-gdb -ex \"target remote /dev/ttyACM0\"\r\nType Ctrl-C three times rapidly OR type this string  \"$D#44\" to exit GDB mode.\r\n"
     }
 
     /// Silent detach — called when DTR drops (host closed port) while
@@ -194,6 +204,7 @@ impl GdbStub {
                     if b == b'$' {
                         self.pkt_len = 0;
                         self.rx_sum = 0;
+                        self.pkt_overflow = false;
                         self.state = RxState::Data;
                     }
                     // GDB may send '+' or '-' ACK/NAK — ignore them
@@ -205,11 +216,14 @@ impl GdbStub {
                         // Re-sync: new packet start
                         self.pkt_len = 0;
                         self.rx_sum = 0;
+                        self.pkt_overflow = false;
                     } else {
                         self.rx_sum = self.rx_sum.wrapping_add(b);
                         if self.pkt_len < PKT_BUF_SIZE {
                             self.pkt[self.pkt_len] = b;
                             self.pkt_len += 1;
+                        } else {
+                            self.pkt_overflow = true;
                         }
                     }
                 }
@@ -224,16 +238,16 @@ impl GdbStub {
                     self.state = RxState::Idle;
                     if let Some(lo) = hex_digit(b) {
                         let expected = (hi << 4) | lo;
-                        if expected == self.rx_sum {
+                        if expected == self.rx_sum && !self.pkt_overflow {
                             // Valid packet — ACK and dispatch
-                            rw.push(b'+');
+                            if !self.no_ack { rw.push(b'+'); }
                             self.dispatch(&mut rw);
                         } else {
-                            // Checksum mismatch — NAK
-                            rw.push(b'-');
+                            // Checksum mismatch or overflow — NAK
+                            if !self.no_ack { rw.push(b'-'); }
                         }
                     } else {
-                        rw.push(b'-'); // malformed checksum
+                        if !self.no_ack { rw.push(b'-'); } // malformed checksum
                     }
                 }
             }
@@ -326,8 +340,8 @@ impl GdbStub {
                             hex_encode_u32_le(lr, &mut buf);
                         }
                         write_packet(rw, &buf);
-                    } else if n == 25 {
-                        // cpsr (register 25 in the arm-core.xml numbering = index 16 after R0-R15)
+                    } else if n == 16 || n == 25 {
+                        // cpsr/xpsr: register 16 sequential (LLDB) or 25 (GDB legacy)
                         if dwt::regs_valid() {
                             hex_encode_u32_le(dwt::saved_reg(16), &mut buf);
                         } else {
@@ -353,10 +367,10 @@ impl GdbStub {
             // ── Read memory: m addr,length ──
             b'm' => {
                 if let Some((addr, len)) = parse_m_args(args) {
-                    // Cap at what fits in response buffer
-                    let max_bytes = (RESP_BUF_SIZE - 10) / 2; // 2 hex chars per byte
+                    // Cap at what fits in BOTH the hex buffer and the response packet
+                    let mut buf = [0u8; 520]; // 520 hex chars = 260 bytes of data
+                    let max_bytes = buf.len() / 2; // 2 hex chars per byte
                     let len = core::cmp::min(len as usize, max_bytes) as u32;
-                    let mut buf = [0u8; 520]; // enough for 256 bytes
                     let mut pos = 0;
                     for i in 0..len {
                         let byte = unsafe {
@@ -552,6 +566,16 @@ impl GdbStub {
                 self.handle_q(args, rw);
             }
 
+            // ── Set packets (Q) ──
+            b'Q' => {
+                if starts_with(args, b"StartNoAckMode") {
+                    self.no_ack = true;
+                    write_packet(rw, b"OK");
+                } else {
+                    write_packet(rw, b"");
+                }
+            }
+
             // ── Thread ops (stub: always OK) ──
             b'H' => {
                 write_packet(rw, b"OK");
@@ -562,10 +586,40 @@ impl GdbStub {
                 write_packet(rw, b"OK"); // thread 1 always alive
             }
 
-            // ── vCont? and other v-packets ──
+            // ── vCont and other v-packets ──
             b'v' => {
-                // vMustReplyEmpty
-                write_packet(rw, b"");
+                if starts_with(args, b"Cont?") {
+                    // Tell client we support vCont with continue, step, stop
+                    write_packet(rw, b"vCont;c;s;t");
+                } else if starts_with(args, b"Cont;c") {
+                    // vCont;c  — continue (same as bare 'c')
+                    dwt::clear_single_step();
+                    let at_bkpt = unsafe { unpatch_bkpt_at_pc() };
+                    if at_bkpt {
+                        self.step_then_continue = true;
+                        dwt::request_single_step();
+                        self.target_running = true;
+                        if dwt::is_halted() { dwt::resume_target(); }
+                    } else {
+                        self.target_running = true;
+                        if dwt::is_halted() { dwt::resume_target(); }
+                    }
+                } else if starts_with(args, b"Cont;s") {
+                    // vCont;s  — single step (same as bare 's')
+                    dwt::request_single_step();
+                    self.target_running = true;
+                    if dwt::is_halted() { dwt::resume_target(); }
+                } else if starts_with(args, b"Cont;t") {
+                    // vCont;t  — stop/interrupt
+                    if self.target_running {
+                        self.target_running = false;
+                        write_packet(rw, b"T02"); // SIGINT
+                    }
+                } else if starts_with(args, b"MustReplyEmpty") {
+                    write_packet(rw, b"");
+                } else {
+                    write_packet(rw, b"");
+                }
             }
 
             // ── Unknown command — empty reply means "unsupported" ──
@@ -582,7 +636,7 @@ impl GdbStub {
             // swbreak+ = we support Z0 software breakpoints
             // hwbreak+ = we support Z1 hardware breakpoints
             // qXfer:features:read+ = we provide target description XML
-            write_packet(rw, b"PacketSize=1024;swbreak+;hwbreak+;qXfer:features:read+");
+            write_packet(rw, b"PacketSize=1024;swbreak+;hwbreak+;qXfer:features:read+;QStartNoAckMode+;vContSupported+");
         } else if starts_with(args, b"Xfer:features:read:target.xml:") {
             let after = &args[b"Xfer:features:read:target.xml:".len()..];
             self.serve_xfer(after, TARGET_XML, rw);
@@ -839,11 +893,13 @@ unsafe fn repatch_all_sw_breakpoints() {
 }
 
 // ── Target description XML ──
-// This tells GDB we are an ARM Cortex-M target with 16 GP regs + cpsr.
+// This tells GDB/LLDB we are an ARM Cortex-M target with 16 GP regs + cpsr.
 // Without this, GDB defaults to "i386" or legacy "arm" with FPA regs.
 
 // Single inline target description — no xi:include, everything in one fetch.
-// This tells GDB we are ARM Cortex-M with 16 GP regs + xPSR (m-profile).
+// Registers are numbered sequentially 0–16 (no gaps).  Both GDB and LLDB
+// are happy with this layout; the 'p' handler accepts both p10 (reg 16)
+// and p19 (reg 25 legacy) for cpsr.
 const TARGET_XML: &[u8] = b"<?xml version=\"1.0\"?>\
 <!DOCTYPE target SYSTEM \"gdb-target.dtd\">\
 <target version=\"1.0\">\
@@ -865,6 +921,6 @@ const TARGET_XML: &[u8] = b"<?xml version=\"1.0\"?>\
 <reg name=\"sp\" bitsize=\"32\" type=\"data_ptr\"/>\
 <reg name=\"lr\" bitsize=\"32\"/>\
 <reg name=\"pc\" bitsize=\"32\" type=\"code_ptr\"/>\
-<reg name=\"xpsr\" bitsize=\"32\" regnum=\"25\"/>\
+<reg name=\"xpsr\" bitsize=\"32\"/>\
 </feature>\
 </target>";

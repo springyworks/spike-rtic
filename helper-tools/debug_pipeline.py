@@ -212,6 +212,13 @@ def main():
     # ── 5. Release port for GDB ──
     s.close()
 
+    # Configure tty for raw access (so cat/echo work after this script)
+    import subprocess
+    subprocess.run(
+        ["stty", "-F", port, "115200", "raw", "-echo", "-hupcl"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
     # Create stable symlink so VS Code launch.json can use a fixed path
     symlink = "/tmp/spike-hub"
     try:

@@ -233,6 +233,15 @@ fn format_size(bytes: u64) -> String {
 
 // ── Serial helper (uses Python/pyserial) ────────────────────
 
+/// Configure the Linux tty for raw serial access so `cat`/`echo` work.
+fn configure_tty(port: &str) {
+    let _ = Command::new("stty")
+        .args(["-F", port, "115200", "raw", "-echo", "-hupcl"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
 fn send_serial_cmd(port: &str, cmd: &str) {
     let script = format!(
         "import serial,time; s=serial.Serial('{}',115200,timeout=1); \
@@ -330,6 +339,7 @@ fn dfu_flash(_root: &Path, bin: &Path) {
             println!("  {GREEN}✓ Flash complete — hub will reboot.{RESET}");
             println!("  Waiting for serial...");
             if let Some(port) = wait_for_serial(20) {
+                configure_tty(&port);
                 println!("  {GREEN}✓ Hub ready on {port}{RESET}");
             }
         }
@@ -620,6 +630,8 @@ fn cmd_connect(root: &Path) {
     let hub = detect_hub();
     match hub {
         HubState::Running(ref port) => {
+            // Configure tty for raw access (so cat/echo also work after exiting)
+            configure_tty(port);
             println!("  Connecting to hub on {CYAN}{port}{RESET}...");
             println!("  {DIM}(Ctrl-C to exit){RESET}");
             println!();

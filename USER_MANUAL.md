@@ -84,6 +84,40 @@ python3 helper-tools/spike_hub_controller.py shell  # interactive shell with upl
 
 Type `help` at the `spike>` prompt for a full command list.
 
+#### Using `cat` / `echo` (no terminal emulator)
+
+Linux sets up `/dev/ttyACM*` with defaults that mangle raw serial
+traffic (`HUPCL`, canonical mode, local echo).  Fix them once per
+session:
+
+```bash
+stty -F /dev/ttyACM0 115200 raw -echo -hupcl
+```
+
+Then simple shell tools work:
+
+```bash
+# Send a command
+echo "status" > /dev/ttyACM0
+
+# Read all hub output (Ctrl-C to stop)
+cat /dev/ttyACM0
+
+# Interactive: read in background, write in foreground
+cat /dev/ttyACM0 &
+cat > /dev/ttyACM0
+```
+
+| Flag | Default | Problem | Fix |
+|------|---------|---------|-----|
+| `HUPCL` | on | DTR drops on file close — races USB before hub processes bytes | `-hupcl` |
+| `icanon` | on | Host-side line buffering/editing interferes with binary protocols | `raw` disables it |
+| `echo` | on | Host echoes + hub echoes = double characters | `-echo` |
+
+> **Note:** For USB CDC ACM the baud rate is purely cosmetic — data
+> flows at USB speed — but `stty` requires one.  `picocom` and `screen`
+> set these flags automatically, which is why they "just work."
+
 ### 1.3 Upload & Run a RAM Demo
 
 ```bash

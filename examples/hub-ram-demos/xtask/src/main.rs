@@ -375,8 +375,9 @@ fn cmd_debug(args: &[String]) {
     // 10. Release port for GDB/LLDB
     drop(serial);
 
-    // 11. Create stable symlink
+    // 11. Create stable symlink + configure tty for raw access
     create_symlink(&port);
+    configure_tty(&port);
 
     let elf = elf_path(&root, &name);
     eprintln!("{GREEN}✓{RESET} RSP mode active on {CYAN}{port}{RESET}");
@@ -760,7 +761,7 @@ fn cobs_encode(data: &[u8]) -> Vec<u8> {
     out
 }
 
-// ── Symlink ─────────────────────────────────────────────────
+// ── Symlink + tty setup ─────────────────────────────────────
 
 fn create_symlink(port: &str) {
     // Remove existing
@@ -770,6 +771,24 @@ fn create_symlink(port: &str) {
     match std::os::unix::fs::symlink(port, SYMLINK) {
         Ok(()) => {}
         Err(e) => eprintln!("{YELLOW}Warning: cannot create {SYMLINK}: {e}{RESET}"),
+    }
+}
+
+/// Configure the Linux tty for raw serial access.
+///
+/// Without this, `cat > /dev/ttyACM0` and `echo cmd > /dev/ttyACM0`
+/// fail because the kernel tty layer defaults to canonical mode with
+/// HUPCL (drops DTR on close, racing USB) and local echo (doubles
+/// characters).  This persists until device re-enumeration.
+fn configure_tty(port: &str) {
+    let status = Command::new("stty")
+        .args(["-F", port, "115200", "raw", "-echo", "-hupcl"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match status {
+        Ok(s) if s.success() => {}
+        _ => eprintln!("{YELLOW}Warning: stty failed for {port} (non-fatal){RESET}"),
     }
 }
 

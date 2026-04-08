@@ -1,9 +1,55 @@
 {
-    // NOTE: "request": "custom" warnings are false positives — it's a valid
-    // CodeLLDB extension value for raw target/process commands.
+    // SPIKE RTIC — Debug Launch Configurations
+    //
+    // Hub connection: xtask handles port detection, auto-kill blockers,
+    // hub mode probing (Shell/RSP/Unknown), and recovery. If no
+    // /dev/ttyACM* is found, the preLaunchTask will fail with a clear
+    // "LEGO SPIKE hub not found" message.
+    //
+    // NOTE: "request": "custom" warnings are false positives — it's a
+    // valid CodeLLDB extension value for raw target/process commands.
     "version": "0.2.0",
     "configurations": [
-        // ── Generic: works for ANY demo in examples/hub-ram-demos/examples/ ──
+
+        // ── Open-editor: debug whichever demo .rs file is active ──
+        {
+            "name": "Debug open file (LLDB)",
+            "type": "lldb",
+            "request": "custom",
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/${fileBasenameNoExtension}"
+            ],
+            "processCreateCommands": [
+                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+            ],
+            "sourceMap": { "/": "/" },
+            "preLaunchTask": "xtask-debug-open-file"
+        },
+        {
+            "name": "Debug open file (GDB)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/${fileBasenameNoExtension}",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb-multiarch",
+            "stopAtEntry": false,
+            "setupCommands": [
+                { "text": "set remotetimeout 10" },
+                { "text": "set serial baud 115200" },
+                { "text": "set mem inaccessible-by-default off" },
+                { "text": "set architecture arm" },
+                { "text": "set arm force-mode thumb" },
+                { "text": "target remote /tmp/spike-hub" }
+            ],
+            "sourceFileMap": {
+                "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
+                "src": "${workspaceFolder}/examples/hub-ram-demos/src"
+            },
+            "preLaunchTask": "xtask-debug-open-file"
+        },
+
+        // ── Prompted: pick any demo by name ──
         {
             "name": "Debug demo (LLDB)",
             "type": "lldb",
@@ -14,9 +60,7 @@
             "processCreateCommands": [
                 "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
             ],
-            "sourceMap": {
-                "/": "/"
-            },
+            "sourceMap": { "/": "/" },
             "preLaunchTask": "xtask-debug-pick"
         },
         {
@@ -42,6 +86,7 @@
             },
             "preLaunchTask": "xtask-debug-pick"
         },
+
         // ── Quick-launch shortcuts (no prompt, just F5) ──
         {
             "name": "Quick: gdb_simple (LLDB)",
@@ -53,9 +98,7 @@
             "processCreateCommands": [
                 "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
             ],
-            "sourceMap": {
-                "/": "/"
-            },
+            "sourceMap": { "/": "/" },
             "preLaunchTask": "xtask-debug-gdb-simple"
         },
         {
@@ -68,9 +111,7 @@
             "processCreateCommands": [
                 "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
             ],
-            "sourceMap": {
-                "/": "/"
-            },
+            "sourceMap": { "/": "/" },
             "preLaunchTask": "xtask-debug-gdb-exercise"
         }
     ],

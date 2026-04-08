@@ -1,31 +1,43 @@
 {
 	"version": "2.0.0",
 	"tasks": [
+		// ── Open-editor tasks: act on whichever demo .rs file is active ──
 		{
-			"label": "xtask-debug-gdb-exercise",
+			"label": "xtask-debug-open-file",
 			"type": "shell",
 			"command": "cargo",
-			"args": ["run", "--", "debug", "gdb_exercise"],
+			"args": ["run", "--", "debug", "${fileBasenameNoExtension}"],
 			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
-			"presentation": { "reveal": "always", "panel": "shared" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
 			"problemMatcher": "$rustc"
 		},
 		{
-			"label": "xtask-debug-gdb-simple",
+			"label": "xtask-build-open-file",
 			"type": "shell",
 			"command": "cargo",
-			"args": ["run", "--", "debug", "gdb_simple"],
+			"args": ["run", "--", "build", "${fileBasenameNoExtension}"],
 			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
-			"presentation": { "reveal": "always", "panel": "shared" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
 			"problemMatcher": "$rustc"
 		},
+		{
+			"label": "xtask-upload-open-file",
+			"type": "shell",
+			"command": "cargo",
+			"args": ["run", "--", "upload", "${fileBasenameNoExtension}"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
+			"problemMatcher": "$rustc"
+		},
+
+		// ── Prompted tasks: pick demo by name ──
 		{
 			"label": "xtask-debug-pick",
 			"type": "shell",
 			"command": "cargo",
 			"args": ["run", "--", "debug", "${input:demoName}"],
 			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
-			"presentation": { "reveal": "always", "panel": "shared" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
 			"problemMatcher": "$rustc"
 		},
 		{
@@ -34,7 +46,7 @@
 			"command": "cargo",
 			"args": ["run", "--", "upload", "${input:demoName}"],
 			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
-			"presentation": { "reveal": "always", "panel": "shared" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
 			"problemMatcher": "$rustc"
 		},
 		{
@@ -44,13 +56,48 @@
 			"args": ["run", "--", "build", "${input:demoName}"],
 			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
 			"group": "build",
-			"presentation": { "reveal": "always", "panel": "shared" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
+			"problemMatcher": "$rustc"
+		},
+
+		// ── Quick-launch shortcuts (hardcoded demo name) ──
+		{
+			"label": "xtask-debug-gdb-simple",
+			"type": "shell",
+			"command": "cargo",
+			"args": ["run", "--", "debug", "gdb_simple"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
 			"problemMatcher": "$rustc"
 		},
 		{
+			"label": "xtask-debug-gdb-exercise",
+			"type": "shell",
+			"command": "cargo",
+			"args": ["run", "--", "debug", "gdb_exercise"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
+			"problemMatcher": "$rustc"
+		},
+
+		// ── Firmware build ──
+		{
 			"label": "build-firmware",
 			"type": "shell",
-			"command": "cd ${workspaceFolder} && cargo build --release 2>&1 | tail -40"
+			"command": "cargo build --release 2>&1 | tail -40",
+			"group": "build",
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
+			"problemMatcher": "$rustc"
+		},
+
+		// ── Hub diagnostics ──
+		{
+			"label": "hub-status",
+			"type": "shell",
+			"command": "python3",
+			"args": ["${workspaceFolder}/helper-tools/hub_state.py"],
+			"presentation": { "reveal": "always", "panel": "shared" },
+			"problemMatcher": []
 		},
 		{
 			"label": "free-port",
@@ -62,16 +109,20 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "build-spike-rtic",
+			"label": "xtask-list",
 			"type": "shell",
-			"command": "cargo build --release 2>&1"
+			"command": "cargo",
+			"args": ["run", "--", "list"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared" },
+			"problemMatcher": []
 		}
 	],
 	"inputs": [
 		{
 			"id": "demoName",
 			"type": "promptString",
-			"description": "Demo name (e.g. gdb_exercise, color_seeker, dual_motors)"
+			"description": "Demo name (e.g. gdb_simple, gdb_exercise, color_seeker, dual_motors)"
 		}
 	]
 }

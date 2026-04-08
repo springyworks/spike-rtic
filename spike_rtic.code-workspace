@@ -22,12 +22,72 @@
 			"statusBar.noFolderBackground": "#083420",
 			"statusBar.noFolderForeground": "#F2FDF8"
 		},
+		"terminal.integrated.env.linux": {
+			"PROJECT_ROOT": "${workspaceFolder}"
+		},
 		"chat.tools.terminal.autoApprove": {
 			"cargo build": true,
 			"/^rust-objcopy -O binary target/thumbv7em-none-eabihf/release/spike-rtic target/spike-rtic\\.bin && ls -la target/spike-rtic\\.bin$/": {
 				"approve": true,
 				"matchCommandLine": true
 			}
-		}
+		},
+		"rust-analyzer.linkedProjects": [
+			"Cargo.toml",
+			"examples/hub-ram-demos/xtask/Cargo.toml"
+		],
+		"runTerminalCommand.commands": [
+			{
+				"command": "cd $PROJECT_ROOT/examples/hub-ram-demos/xtask && cargo run -- debug $(basename {resource} .rs)",
+				"auto": true,
+				"preserve": true,
+				"name": "Debug demo",
+				"group": "SPIKE Hub"
+			},
+			{
+				"command": "cd $PROJECT_ROOT/examples/hub-ram-demos/xtask && cargo run -- upload $(basename {resource} .rs)",
+				"auto": true,
+				"preserve": true,
+				"name": "Upload & run demo",
+				"group": "SPIKE Hub"
+			},
+			{
+				"command": "cd $PROJECT_ROOT/examples/hub-ram-demos/xtask && cargo run -- build $(basename {resource} .rs)",
+				"auto": true,
+				"name": "Build demo",
+				"group": "SPIKE Hub"
+			},
+			{
+				"command": "cd $PROJECT_ROOT && python3 helper-tools/hub_state.py",
+				"auto": true,
+				"name": "Hub status",
+				"group": "SPIKE Hub"
+			},
+			{
+				"command": "cd $PROJECT_ROOT/examples/hub-ram-demos/xtask && cargo run -- free-port",
+				"auto": true,
+				"name": "Free port",
+				"group": "SPIKE Hub"
+			},
+			{
+				"command": "cd $PROJECT_ROOT/examples/hub-ram-demos/xtask && cargo run -- list",
+				"auto": true,
+				"name": "List demos",
+				"group": "SPIKE Hub"
+			},
+			{
+				"command": "cd $PROJECT_ROOT && python3 helper-tools/spike_hub_controller.py diag",
+				"auto": true,
+				"name": "Hub diagnostics (full)",
+				"group": "SPIKE Hub"
+			},
+			{
+				"command": "cd $PROJECT_ROOT && python3 helper-tools/spike_hub_controller.py",
+				"auto": true,
+				"preserve": true,
+				"name": "Hub controller TUI",
+				"group": "SPIKE Hub"
+			}
+		]
 	}
 }

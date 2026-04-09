@@ -16,6 +16,19 @@ if [ -z "${PROJECT_ROOT:-}" ]; then
     export PROJECT_ROOT="$DIR"
 fi
 
+# Intercept "pick" example → launch interactive demo picker
+ELF_BASE="$(basename "$ELF")"
+if [ "$ELF_BASE" = "pick" ]; then
+    DEMO_XTASK="$PROJECT_ROOT/examples/hub-ram-demos/xtask/target/x86_64-unknown-linux-gnu/debug/demo-xtask"
+    if [ -x "$DEMO_XTASK" ]; then
+        exec "$DEMO_XTASK"
+    fi
+    exec cargo run \
+        --manifest-path "$PROJECT_ROOT/examples/hub-ram-demos/xtask/Cargo.toml" \
+        --target x86_64-unknown-linux-gnu \
+        --quiet --
+fi
+
 # Fast path: run pre-compiled xtask binary directly (avoids cargo overhead)
 XTASK_BIN="$PROJECT_ROOT/xtask/target/x86_64-unknown-linux-gnu/debug/xtask"
 if [ -x "$XTASK_BIN" ]; then

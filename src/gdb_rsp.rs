@@ -45,6 +45,7 @@
 
 use crate::dwt;
 use crate::fpb;
+use crate::user_app_io;
 
 // ── Packet buffer ──
 // GDB RSP packets can be large (register dump = 17×8 = 136 hex chars + framing).
@@ -109,6 +110,9 @@ pub struct GdbStub {
     step_then_continue: bool,
     /// No-ack mode (QStartNoAckMode): suppress +/- ACK/NAK.
     no_ack: bool,
+    /// Entry breakpoint address planted by enter_debug(); auto-removed
+    /// the first time the target halts at it.  0 = none.
+    entry_bkpt: u32,
 }
 
 impl GdbStub {
@@ -125,6 +129,7 @@ impl GdbStub {
             target_running: false,
             step_then_continue: false,
             no_ack: false,
+            entry_bkpt: 0,
         }
     }
 
@@ -144,11 +149,41 @@ impl GdbStub {
         self.target_running = false;
         self.step_then_continue = false;
         self.no_ack = false;
+        self.entry_bkpt = 0;
         // Halt the demo: pend DebugMonitor so it fires on return to
         // Thread mode (where sandboxed demos run).
         dwt::set_gdb_active(true);
         dwt::pend_debugmon();
-        b"GDB stub active. Connect with:\r\n  arm-none-eabi-gdb -ex \"target remote /dev/ttyACM0\"\r\nType Ctrl-C three times rapidly OR type this string  \"$D#44\" to exit GDB mode.\r\n"
+        b"GDB RSP active. Connect with:\r\n  arm-none-eabi-gdb -ex \"target remote /dev/ttyACM0\"\r\nType Ctrl-C three times rapidly OR type this string  \"$D#44\" to exit GDB mode.\r\n"
+    }
+
+    /// Enter GDB mode for debug sessions — used by `debug` shell command.
+    ///
+    /// Unlike `enter()`, does NOT pend DebugMonitor (the BKPT at the
+    /// demo entry point will halt the target naturally).  Also plants
+    /// a software breakpoint at the demo's _start address so the demo
+    /// halts on its first instruction.
+    ///
+    /// Sets `target_running = true` so the first halt (from hitting the
+    /// entry BKPT) is reported as a T05 stop-reply to GDB.  The entry
+    /// BKPT is auto-removed on first hit so `continue` runs straight
+    /// to the user's breakpoints.
+    pub fn enter_debug(&mut self, entry_addr: u32) -> &'static [u8] {
+        self.active = true;
+        self.state = RxState::Idle;
+        self.pkt_len = 0;
+        self.pkt_overflow = false;
+        self.pending_stop = false; // wait for real BKPT halt
+        self.last_debugmon = dwt::debugmon_count();
+        self.target_running = true; // demo will start and hit BKPT
+        self.step_then_continue = false;
+        self.no_ack = false;
+        self.entry_bkpt = entry_addr;
+        dwt::set_gdb_active(true);
+        // Plant BKPT at demo entry so it halts on first instruction.
+        // The demo hasn't started yet (idle picks it up after we return).
+        unsafe { set_sw_breakpoint(entry_addr); }
+        b"GDB debug active - demo will halt at entry.\r\nType Ctrl-C three times rapidly OR type this string  \"$D#44\" to exit GDB mode.\r\n"
     }
 
     /// Silent detach — called when DTR drops (host closed port) while
@@ -166,6 +201,51 @@ impl GdbStub {
         }
         self.active = false;
         self.target_running = false;
+        self.entry_bkpt = 0;
+    }
+
+    /// Flush buffered demo output as O-packets into the response writer.
+    ///
+    /// Called from halt detection (just before T05) while GDB is still
+    /// in "waiting for stop-reply" mode, where O-packets are valid.
+    /// Output accumulated in `user_app_io::BUF` while the demo ran.
+    ///
+    /// Writes as many O-packets as fit in `rw`, leaving room for T05.
+    fn flush_o_packets(&self, rw: &mut RespWriter) {
+        loop {
+            let data = user_app_io::pending();
+            if data.is_empty() {
+                break;
+            }
+            // Reserve 10 bytes for the T05 packet ($T05#b9 = 8 + margin)
+            let avail = rw.buf.len().saturating_sub(rw.pos + 10);
+            // Each O-packet: $O<hex>#xx = 5 framing + 2 per input byte
+            if avail < 7 {
+                break; // not enough room for even 1 byte
+            }
+            let max_input = (avail - 5) / 2;
+            let n = core::cmp::min(data.len(), max_input);
+            if n == 0 {
+                break;
+            }
+
+            // Build $O<hex>#<checksum> directly into rw
+            rw.push(b'$');
+            let mut sum: u8 = b'O';
+            rw.push(b'O');
+            for &b in &data[..n] {
+                let hi = HEX_CHARS[(b >> 4) as usize];
+                let lo = HEX_CHARS[(b & 0xF) as usize];
+                sum = sum.wrapping_add(hi).wrapping_add(lo);
+                rw.push(hi);
+                rw.push(lo);
+            }
+            rw.push(b'#');
+            rw.push(HEX_CHARS[(sum >> 4) as usize]);
+            rw.push(HEX_CHARS[(sum & 0xF) as usize]);
+
+            user_app_io::advance(n);
+        }
     }
 
     /// Feed incoming USB bytes while in GDB mode.
@@ -174,20 +254,57 @@ impl GdbStub {
     pub fn feed(&mut self, data: &[u8], resp: &mut [u8; RESP_BUF_SIZE]) -> usize {
         let mut rw = RespWriter::new(resp);
 
-        // Check if target has halted inside DebugMonitor handler
-        if dwt::is_halted() && self.target_running {
+        // Check if target has halted inside DebugMonitor handler.
+        //
+        // Race guard: after `c`/`s` calls resume_target(), the DebugMonitor
+        // handler (priority 0xF0) hasn't cleared TARGET_HALTED yet because
+        // we're in the USB ISR (priority 0xE0, higher).  The next poll_gdb()
+        // would see is_halted()=true with stale registers and send a bogus
+        // T05.  We prevent this by checking debugmon_count() — if it hasn't
+        // incremented since the last halt we processed, this is a stale
+        // observation of the same halt, not a new one.
+        let new_halt = dwt::debugmon_count() != self.last_debugmon;
+        if dwt::is_halted() && self.target_running && new_halt {
             if self.step_then_continue {
                 // We single-stepped past a removed BKPT — re-patch and resume
                 self.step_then_continue = false;
+                self.last_debugmon = dwt::debugmon_count();
                 unsafe { repatch_all_sw_breakpoints(); }
                 dwt::clear_single_step();
                 dwt::resume_target();
                 // target_running stays true — we don't report this halt to GDB
             } else {
+                // Check if this is the initial entry halt (planted by `debug`)
+                let is_entry_halt = if self.entry_bkpt != 0 {
+                    let pc = dwt::saved_reg(15);
+                    if pc == self.entry_bkpt {
+                        unsafe { clear_sw_breakpoint(self.entry_bkpt); }
+                        self.entry_bkpt = 0;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
                 self.target_running = false;
                 self.last_debugmon = dwt::debugmon_count();
-                // Send stop-reply: T05 = SIGTRAP (breakpoint/watchpoint)
-                write_packet(&mut rw, b"T05");
+
+                if is_entry_halt {
+                    // Entry halt — GDB hasn't connected yet, so T05 now
+                    // would buffer in serial/socat and create a stale
+                    // stop-reply.  Defer to `?` handler via pending_stop.
+                    self.pending_stop = true;
+                } else if data.is_empty() {
+                    // Post-continue halt (polled, no incoming command).
+                    // GDB is waiting for a stop-reply after `c`/`s`.
+                    self.flush_o_packets(&mut rw);
+                    write_packet(&mut rw, b"T05");
+                } else {
+                    // Post-continue halt with incoming data — defer.
+                    self.pending_stop = true;
+                }
             }
         }
 
@@ -269,20 +386,31 @@ impl GdbStub {
         match cmd {
             // ── Stop reason ──
             b'?' => {
-                // If target is running, halt it first so registers are valid.
-                if self.target_running {
-                    self.target_running = false;
-                    dwt::pend_debugmon();
-                    // Give DebugMonitor time to fire (it pends, fires on
-                    // return to Thread mode — but we're in an ISR here,
-                    // so we just mark the state; GDB will see valid regs
-                    // on the next poll cycle).
-                }
                 if self.pending_stop {
                     self.pending_stop = false;
+                    self.flush_o_packets(rw);
                     write_packet(rw, b"T05"); // SIGTRAP (breakpoint/watchpoint hit)
                 } else if dwt::is_halted() {
-                    write_packet(rw, b"T05"); // genuinely halted
+                    // Target genuinely halted (BKPT, watchpoint, single-step).
+                    // Clean up entry breakpoint if we halted there.
+                    if self.entry_bkpt != 0 {
+                        let pc = dwt::saved_reg(15);
+                        if pc == self.entry_bkpt {
+                            unsafe { clear_sw_breakpoint(self.entry_bkpt); }
+                            self.entry_bkpt = 0;
+                        }
+                    }
+                    if self.target_running {
+                        self.target_running = false;
+                    }
+                    self.last_debugmon = dwt::debugmon_count();
+                    write_packet(rw, b"T05");
+                } else if self.target_running {
+                    // Target not halted but running — report T05 anyway.
+                    // This happens in debug mode before the demo hits the
+                    // entry BKPT.  GDB needs an initial stop to proceed.
+                    // Don't pend DebugMonitor — it would halt idle, not the demo.
+                    write_packet(rw, b"T05");
                 } else {
                     write_packet(rw, b"S05"); // SIGTRAP — initial stop
                 }
@@ -543,6 +671,7 @@ impl GdbStub {
                 }
                 self.active = false;
                 self.target_running = false;
+                self.entry_bkpt = 0;
             }
 
             // ── Kill ──
@@ -559,6 +688,7 @@ impl GdbStub {
                 }
                 self.active = false;
                 self.target_running = false;
+                self.entry_bkpt = 0;
             }
 
             // ── Query packets ──

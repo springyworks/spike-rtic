@@ -106,21 +106,38 @@ pub unsafe fn init() -> &'static UsbBusAllocator<UsbBus<SpikeUsbOtg>> {
     (*core::ptr::addr_of!(USB_BUS)).as_ref().unwrap()
 }
 
-/// Create a CDC serial port and USB device from the bus allocator.
+/// Create two CDC serial ports and a composite USB device.
+///
+/// Returns `(shell_serial, gdb_serial, usb_dev)`:
+/// - `shell_serial` → `/dev/ttyACM0` (or whichever Linux assigns to interface 0)
+/// - `gdb_serial`   → `/dev/ttyACM1` (interface 2)
+///
+/// Device class 0xEF (misc) with IAD sub/protocol tells the host OS
+/// to look for Interface Association Descriptors — each CDC function
+/// groups its comm + data interfaces under one IAD.
 pub fn create_device(
     bus: &'static UsbBusAllocator<UsbBus<SpikeUsbOtg>>,
 ) -> (
     SerialPort<'static, UsbBus<SpikeUsbOtg>>,
+    SerialPort<'static, UsbBus<SpikeUsbOtg>>,
     UsbDevice<'static, UsbBus<SpikeUsbOtg>>,
 ) {
-    let serial = SerialPort::new(bus);
+    // Allocate CDC 0 (shell) first — gets interface 0/1, lower EP numbers
+    let shell_serial = SerialPort::new(bus);
+    // Allocate CDC 1 (GDB RSP) second — gets interface 2/3
+    let gdb_serial = SerialPort::new(bus);
+
     let usb_dev = UsbDeviceBuilder::new(bus, UsbVidPid(0x0694, 0x0042))
         .strings(&[StringDescriptors::default()
             .manufacturer("LEGO-RTIC")
-            .product("Spike Prime RTIC Shell")
+            .product("Spike Prime RTIC")
             .serial_number("RTIC001")])
         .expect("string descriptor error")
-        .device_class(usbd_serial::USB_CLASS_CDC)
+        // Composite device: class 0xEF, subclass 0x02, protocol 0x01 (IAD)
+        .device_class(0xEF)
+        .device_sub_class(0x02)
+        .device_protocol(0x01)
+        .composite_with_iads()
         .build();
-    (serial, usb_dev)
+    (shell_serial, gdb_serial, usb_dev)
 }

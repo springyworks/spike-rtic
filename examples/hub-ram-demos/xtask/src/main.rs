@@ -29,8 +29,9 @@
 use serialport::{SerialPort, SerialPortType};
 use std::env;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
+use std::os::unix::process::CommandExt;
 use std::process::{exit, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -38,6 +39,8 @@ const LEGO_VID: u16 = 0x0694;
 const RUNTIME_PID: u16 = 0x0042;
 const BAUD: u32 = 115_200;
 const SYMLINK: &str = "/tmp/spike-hub";
+const STATE_FILE: &str = "/tmp/spike-hub-state";
+const GDB_TCP_PORT: u16 = 3333;
 
 // ── ANSI ────────────────────────────────────────────────────
 const RED: &str = "\x1b[91m";
@@ -59,15 +62,23 @@ fn main() {
         Some("port") => cmd_port(),
         Some("free-port") => cmd_free_port(),
         Some("-h") | Some("--help") => usage(),
-        _ => usage(),
+        None => interactive(),
+        Some(other) => {
+            // Treat unknown arg as a demo name → interactive action picker
+            let name = other.strip_suffix(".rs").unwrap_or(other).to_string();
+            interactive_for(&name);
+        }
     }
 }
 
 fn usage() {
     eprintln!("{BOLD}demo-xtask{RESET} — SPIKE hub RAM demo manager");
     eprintln!();
-    eprintln!("Usage: cargo xtask <command> [demo_name]");
+    eprintln!("Usage: cargo example [demo_name]");
+    eprintln!("       cargo example <command> [demo_name]");
     eprintln!();
+    eprintln!("  {CYAN}(none){RESET}           Interactive: pick demo → pick action");
+    eprintln!("  {CYAN}<name>{RESET}            Pick action for a specific demo");
     eprintln!("  {CYAN}debug{RESET}  <name>   Build → objcopy → upload → go → GDB RSP mode");
     eprintln!("  {CYAN}build{RESET}  <name>   Build → objcopy (.bin output)");
     eprintln!("  {CYAN}upload{RESET} <name>   Build → objcopy → upload → go (run demo)");
@@ -287,21 +298,26 @@ fn ensure_shell_mode(serial: &mut Box<dyn SerialPort>) {
             send_line(serial, "");
             let resp = read_until(serial, "spike>", Duration::from_secs(5));
             if !resp.contains("spike>") {
-                die("Hub did not return to shell after RSP detach");
+                // Port may be stale after detach (hub re-enumerated)
+                eprintln!("  {YELLOW}Port may be stale — attempting re-detection...{RESET}");
+                *serial = reopen_or_die();
+                if !sync_shell(serial) {
+                    die("Hub did not return to shell after RSP detach + port re-detection");
+                }
             }
             eprintln!("  {GREEN}✓{RESET} Recovered to shell mode");
         }
         HubMode::Unknown => {
             eprintln!("  {YELLOW}Hub mode unknown — trying full recovery...{RESET}");
-            // Shotgun approach: Ctrl-C, RSP detach, stop, empty line
+            // Shotgun approach: Ctrl-C, RSP detach, kill, empty line
             let _ = serial.write_all(b"\x03");
             std::thread::sleep(Duration::from_millis(100));
             let _ = serial.write_all(b"$D#44");
             let _ = serial.flush();
             std::thread::sleep(Duration::from_millis(500));
             drain(serial);
-            send_line(serial, "stop");
-            drain_for(serial, Duration::from_millis(300));
+            send_line(serial, "kill");
+            drain_for(serial, Duration::from_millis(500));
             send_line(serial, "");
             let resp = read_until(serial, "spike>", Duration::from_secs(8));
             if !resp.contains("spike>") {
@@ -312,12 +328,126 @@ fn ensure_shell_mode(serial: &mut Box<dyn SerialPort>) {
                 send_line(serial, "");
                 let resp2 = read_until(serial, "spike>", Duration::from_secs(8));
                 if !resp2.contains("spike>") {
-                    die(&format!("Cannot reach shell mode. Got: {:?}", resp2));
+                    // Port may be stale (hub re-enumerated to a different
+                    // ttyACM).  Try re-detecting before giving up.
+                    eprintln!("  {YELLOW}Port may be stale — attempting re-detection...{RESET}");
+                    *serial = reopen_or_die();
+                    if !sync_shell(serial) {
+                        die(&format!("Cannot reach shell mode after port re-detection. Got: {:?}", resp2));
+                    }
                 }
             }
             eprintln!("  {GREEN}✓{RESET} Recovered to shell mode");
         }
     }
+}
+
+// ── Interactive mode ────────────────────────────────────────
+
+fn list_demos() -> Vec<String> {
+    let root = demo_root();
+    let examples_dir = root.join("examples");
+    let mut demos: Vec<String> = fs::read_dir(&examples_dir)
+        .unwrap_or_else(|e| die(&format!("Cannot read {}: {e}", examples_dir.display())))
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.strip_suffix(".rs").map(|s| s.to_string())
+        })
+        .collect();
+    demos.sort();
+    demos
+}
+
+fn pick_demo_interactive() -> String {
+    let demos = list_demos();
+    if demos.is_empty() {
+        die("No demos found");
+    }
+
+    eprintln!();
+    eprintln!("  {BOLD}Available demos:{RESET}");
+    eprintln!("  {}", "─".repeat(44));
+
+    let mid = (demos.len() + 1) / 2;
+    for i in 0..mid {
+        let left = format!("{:>3}. {}", i + 1, demos[i]);
+        let right = if i + mid < demos.len() {
+            format!("{:>3}. {}", i + mid + 1, demos[i + mid])
+        } else {
+            String::new()
+        };
+        eprintln!("  {:<26}{}", left, right);
+    }
+    eprintln!();
+
+    let input = prompt_input("  Pick demo [number or name]: ");
+
+    // Try as number
+    if let Ok(n) = input.parse::<usize>() {
+        if n >= 1 && n <= demos.len() {
+            return demos[n - 1].clone();
+        }
+    }
+    // Prefix match
+    if let Some(d) = demos.iter().find(|d| d.starts_with(&input)) {
+        return d.clone();
+    }
+    // Exact match
+    if demos.contains(&input) {
+        return input;
+    }
+
+    die(&format!("Demo not found: {input}"));
+}
+
+fn pick_action(name: &str) {
+    eprintln!();
+    eprintln!("  {BOLD}Demo:{RESET} {CYAN}{name}{RESET}");
+    eprintln!("  {}", "─".repeat(44));
+    eprintln!("  {BOLD}[1]{RESET} Upload & run");
+    eprintln!("  {BOLD}[2]{RESET} Build only (.bin)");
+    eprintln!("  {BOLD}[3]{RESET} Debug (build → upload → GDB RSP)");
+    eprintln!("  {DIM}[q] Cancel{RESET}");
+    eprintln!();
+
+    let choice = prompt_input("  Choose [1-3/q]: ");
+    let name_args = [name.to_string()];
+    match choice.as_str() {
+        "1" | "upload" | "u" => cmd_upload(&name_args),
+        "2" | "build" | "b" => cmd_build(&name_args),
+        "3" | "debug" | "d" => cmd_debug(&name_args),
+        "q" | "Q" | "" => {
+            eprintln!("  {DIM}Cancelled.{RESET}");
+        }
+        _ => eprintln!("  {RED}Invalid choice.{RESET}"),
+    }
+}
+
+fn interactive() {
+    let name = pick_demo_interactive();
+    pick_action(&name);
+}
+
+fn interactive_for(name: &str) {
+    // Verify the demo exists
+    let demos = list_demos();
+    let resolved = if demos.contains(&name.to_string()) {
+        name.to_string()
+    } else if let Some(d) = demos.iter().find(|d| d.starts_with(name)) {
+        d.clone()
+    } else {
+        die(&format!("Demo not found: {name}. Use `list` to see available demos."));
+    };
+    pick_action(&resolved);
+}
+
+fn prompt_input(msg: &str) -> String {
+    eprint!("{msg}");
+    io::stderr().flush().unwrap();
+    let mut buf = String::new();
+    io::stdin().lock().read_line(&mut buf).unwrap();
+    buf.trim().to_string()
 }
 
 // ── Commands ────────────────────────────────────────────────
@@ -330,10 +460,19 @@ fn cmd_debug(args: &[String]) {
     let bin_path = build_and_objcopy(&root, &name);
 
     // 2. Find hub port
-    let port = find_hub_port_or_die();
+    let mut port = find_hub_port_or_die();
 
     // 3. Ensure port is free (auto-kill blockers)
     ensure_port_free(&port);
+
+    // 3b. Re-detect port: killing a blocker (e.g. CodeLLDB adapter) can
+    // cause the hub to re-enumerate on a different ttyACM.
+    std::thread::sleep(Duration::from_millis(500));
+    let new_port = find_hub_port_or_die();
+    if new_port != port {
+        eprintln!("  {YELLOW}Port changed after free: {port} → {new_port}{RESET}");
+        port = new_port;
+    }
 
     // 4. Open serial
     eprintln!("{BOLD}Uploading & entering RSP mode...{RESET}");
@@ -342,51 +481,403 @@ fn cmd_debug(args: &[String]) {
     // 5. Probe hub state and get to shell mode
     ensure_shell_mode(&mut serial);
 
-    // 6. Stop any running demo
-    send_line(&mut serial, "stop");
-    drain_for(&mut serial, Duration::from_millis(300));
+    // 6. Kill any running demo cooperatively (SIGTERM).
+    // NEVER use "kill -9" here — force_kill_sandbox from the USB ISR
+    // context leaves BASEPRI elevated, permanently blocking priority 2
+    // tasks (heartbeat, sensor, USB) → watchdog reset after ~5 s.
+    send_line(&mut serial, "kill");
+    drain_for(&mut serial, Duration::from_millis(500));
 
     // 7. Upload
     let bin_data = fs::read(&bin_path).unwrap_or_else(|e| {
         die(&format!("Cannot read {}: {e}", bin_path.display()));
     });
+    sync_shell_or_die(&mut serial, "upload");
     // Bump timeout for upload protocol (needs longer reads)
     let _ = serial.set_timeout(Duration::from_secs(2));
     upload_binary(&mut serial, &bin_data);
     // Restore fast timeout
     let _ = serial.set_timeout(Duration::from_millis(100));
 
-    // 8. Start demo
-    send_line(&mut serial, "go");
-    drain_for(&mut serial, Duration::from_millis(300));
+    // 8. Start demo in debug mode — combined go + gdb in one command.
+    // The firmware's `debug` command:
+    //   - Plants BKPT at demo entry (_start at 0x20040000)
+    //   - Enters GDB/RSP mode (gdb_active, pending_stop)
+    //   - Starts demo in Thread mode (privileged, no MPU)
+    //   - Demo hits BKPT immediately → DebugMonitor halts at _start
+    // This replaces separate go + gdb and fixes the priority conflict
+    // that prevented DebugMonitor from halting go! (Handler mode) demos.
+    start_debug_session(&mut serial);
 
-    // 9. Enter GDB RSP mode
-    send_line(&mut serial, "gdb");
-    // Wait for GDB greeting — confirms the stub is active.
-    let greeting = read_until(&mut serial, "exit GDB mode", Duration::from_secs(2));
-    if !greeting.contains("GDB stub active") {
-        eprintln!("{YELLOW}Warning: GDB greeting not seen — proceeding anyway{RESET}");
+    // Re-detect port: hub may have rebooted during recovery, changing
+    // ttyACM number (Linux CDC ACM re-enumeration quirk).
+    if let Some(name) = serial.name() {
+        if name != port {
+            eprintln!("  {YELLOW}Port changed: {port} → {name}{RESET}");
+            port = name;
+        }
     }
-    // Final drain: consume any trailing bytes after the greeting
-    drain_for(&mut serial, Duration::from_millis(200));
-    // Flush kernel serial buffers so GDB starts with a clean slate
-    let _ = serial.clear(serialport::ClearBuffer::All);
 
-    // 10. Release port for GDB/LLDB
+    // 9. Find the dedicated GDB port (ttyACM1 / interface 2)
+    //    With dual-CDC firmware, GDB RSP goes on a separate USB serial port.
+    //    Shell port (ttyACM0) stays available for shell commands.
+    let gdb_port = find_gdb_port().unwrap_or_else(|| {
+        // Fallback: assume port+1 (e.g., ttyACM0 → ttyACM1)
+        if let Some(num_str) = port.strip_prefix("/dev/ttyACM") {
+            if let Ok(n) = num_str.parse::<u32>() {
+                eprintln!("  {YELLOW}GDB port not found by sysfs — trying ttyACM{}{RESET}", n + 1);
+                return format!("/dev/ttyACM{}", n + 1);
+            }
+        }
+        // No GDB port at all — fall back to shell port (single-CDC compat)
+        eprintln!("  {YELLOW}No GDB port found — using shell port for RSP{RESET}");
+        port.clone()
+    });
+
+    // 10. Release shell port — keep it free for interactive use
     drop(serial);
+    std::thread::sleep(Duration::from_millis(100));
 
-    // 11. Create stable symlink + configure tty for raw access
+    // 11. Configure GDB port TTY settings
+    configure_tty(&gdb_port);
+
+    // 12. Create stable symlinks
     create_symlink(&port);
-    configure_tty(&port);
+    // Also create /tmp/spike-gdb symlink
+    let gdb_symlink = "/tmp/spike-gdb";
+    let _ = std::fs::remove_file(gdb_symlink);
+    let _ = std::os::unix::fs::symlink(&gdb_port, gdb_symlink);
 
+    // 13. Write state file so other chain participants can check
     let elf = elf_path(&root, &name);
-    eprintln!("{GREEN}✓{RESET} RSP mode active on {CYAN}{port}{RESET}");
+    write_hub_state_file(&port, &name, &elf);
+
+    eprintln!("{GREEN}✓{RESET} Shell port: {CYAN}{port}{RESET}");
+    eprintln!("{GREEN}✓{RESET} GDB port: {CYAN}{gdb_port}{RESET}");
     eprintln!("{GREEN}✓{RESET} Symlink {CYAN}{SYMLINK}{RESET} → {port}");
+    eprintln!("{GREEN}✓{RESET} Symlink {CYAN}{gdb_symlink}{RESET} → {gdb_port}");
+    eprintln!("{GREEN}✓{RESET} State written to {CYAN}{STATE_FILE}{RESET}");
+
+    // 14. Start TCP→serial bridge on GDB port (not shell port)
+    start_gdb_bridge(&gdb_port);
+
     eprintln!();
     eprintln!("{DIM}Connect with:{RESET}");
     eprintln!("  gdb-multiarch {} \\", elf.display());
     eprintln!("    -ex \"set architecture arm\" \\");
-    eprintln!("    -ex \"target remote {SYMLINK}\"");
+    eprintln!("    -ex \"target remote localhost:3333\"");
+}
+
+/// Start a debug session using the firmware's `debug` shell command.
+/// This combines demo launch + GDB RSP entry into one command:
+///   - Plants BKPT at demo entry (halt on first instruction)
+///   - Enters RSP mode
+///   - Starts demo in Thread mode (privileged, DebugMonitor works)
+/// Retries once on failure.
+fn start_debug_session(serial: &mut Box<dyn SerialPort>) {
+    for attempt in 1..=2 {
+        if attempt > 1 {
+            eprintln!("  {YELLOW}Retry: recovering to shell...{RESET}");
+            let _ = serial.write_all(b"$D#44");
+            let _ = serial.flush();
+            std::thread::sleep(Duration::from_millis(300));
+            drain(serial);
+            send_line(serial, "kill");
+            drain_for(serial, Duration::from_millis(500));
+            send_line(serial, "");
+            let resp = read_until(serial, "spike>", Duration::from_secs(3));
+            if !resp.contains("spike>") {
+                eprintln!("  {YELLOW}Hub unresponsive — checking for reboot...{RESET}");
+                drop(std::mem::replace(serial, reopen_or_die()));
+                send_line(serial, "");
+                let resp2 = read_until(serial, "spike>", Duration::from_secs(8));
+                if !resp2.contains("spike>") {
+                    die("Cannot reach hub after recovery attempt");
+                }
+                eprintln!("  {GREEN}✓{RESET} Hub reconnected after reboot");
+            }
+        }
+
+        sync_shell_or_die(serial, "debug");
+
+        // Send the combined debug command
+        send_line(serial, "debug");
+        let greeting = read_until_verbose(serial, "exit GDB mode", Duration::from_secs(3));
+
+        if greeting.contains("GDB debug active") {
+            eprintln!("  {GREEN}✓{RESET} Debug session started (demo halted at entry)");
+            drain_for(serial, Duration::from_millis(200));
+            let _ = serial.clear(serialport::ClearBuffer::All);
+            return;
+        }
+
+        // Greeting not seen — probe RSP directly
+        eprintln!("  {YELLOW}Debug greeting not seen ({} bytes: {:?}) — probing RSP...{RESET}",
+            greeting.len(), &greeting[..greeting.len().min(120)]);
+        drain_for(serial, Duration::from_millis(100));
+        let _ = serial.clear(serialport::ClearBuffer::All);
+
+        if verify_rsp_packet(serial) {
+            eprintln!("  {GREEN}✓{RESET} RSP probe confirmed — debug session active");
+            return;
+        }
+
+        eprintln!("  {RED}RSP probe failed (attempt {attempt}/2){RESET}");
+    }
+
+    die(
+        "Debug session failed after 2 attempts.\n\
+         Possible causes:\n\
+         - No binary loaded (upload failed?)\n\
+         - Firmware doesn't support 'debug' command (needs reflash)\n\
+         - Serial communication issue",
+    );
+}
+
+/// Start demo with "go", enter GDB RSP mode with "gdb", and *verify*
+/// RSP is actually active. Retries once on failure. Dies if RSP cannot
+/// be confirmed — the preLaunchTask must fail so VS Code doesn't launch
+/// a debugger that will time out.
+fn start_demo_and_enter_rsp(serial: &mut Box<dyn SerialPort>, go_cmd: &str) {
+    for attempt in 1..=2 {
+        if attempt > 1 {
+            eprintln!("  {YELLOW}Retry: recovering to shell...{RESET}");
+            // Try to get back to shell: detach RSP if stuck, kill demo
+            let _ = serial.write_all(b"$D#44");
+            let _ = serial.flush();
+            std::thread::sleep(Duration::from_millis(300));
+            drain(serial);
+            send_line(serial, "kill");
+            drain_for(serial, Duration::from_millis(500));
+            // Verify we're in shell
+            send_line(serial, "");
+            let resp = read_until(serial, "spike>", Duration::from_secs(3));
+            if !resp.contains("spike>") {
+                // Hub may have rebooted (watchdog / crash).  Try to
+                // re-detect the port and re-open.
+                eprintln!("  {YELLOW}Hub unresponsive — checking for reboot...{RESET}");
+                drop(std::mem::replace(serial, reopen_or_die()));
+                // After reboot, hub is in shell mode with no demo running.
+                // Must send data first to trigger host_synced on the hub —
+                // until feed() is called, shell output drain is gated off.
+                send_line(serial, "");
+                let resp2 = read_until(serial, "spike>", Duration::from_secs(8));
+                if !resp2.contains("spike>") {
+                    die("Cannot reach hub after recovery attempt");
+                }
+                eprintln!("  {GREEN}✓{RESET} Hub reconnected after reboot");
+            }
+        }
+
+        // Sync: confirm shell is responsive before starting demo
+        sync_shell_or_die(serial, "go");
+
+        // Start demo
+        send_line(serial, go_cmd);
+        let go_resp = read_until_timeout(serial, Duration::from_millis(600));
+        if go_resp.contains("ERR:") {
+            eprintln!("  {RED}go command failed: {}{RESET}", go_resp.trim());
+            if attempt < 2 { continue; }
+            die("Cannot start demo — 'go' command failed");
+        }
+        if go_resp.contains("go ") || go_resp.contains("sandboxed") || go_resp.contains("PRIVILEGED") {
+            eprintln!("  {GREEN}✓{RESET} Demo started");
+        } else {
+            eprintln!("  {DIM}go response: {:?}{RESET}", go_resp.trim());
+        }
+
+        // Small pause for demo to initialize — but log what we eat
+        let drained = read_until_timeout(serial, Duration::from_millis(300));
+        if !drained.is_empty() {
+            eprintln!("  {DIM}drain after go ({} bytes): {:?}{RESET}",
+                drained.len(), &drained[..drained.len().min(120)]);
+        }
+
+        // ── Serial health check ─────────────────────────────────
+        // Verify the serial link still works before entering GDB mode.
+        // If the demo faulted (e.g. sandboxed demo hit MPU) and corrupted
+        // USB state, or if the tty fd went stale, we catch it here.
+        if !sync_shell(serial) {
+            eprintln!("  {RED}Serial health check FAILED — hub not responding{RESET}");
+            if attempt < 2 { continue; }
+            die("Serial link broken after starting demo");
+        }
+        eprintln!("  {DIM}serial health check: OK{RESET}");
+
+        // Enter GDB mode — with verbose error detection
+        if let Err(e) = serial.write_all(b"gdbrsp\r\n") {
+            eprintln!("  {RED}write_all(gdb) failed: {e}{RESET}");
+            if attempt < 2 { continue; }
+            die("Cannot write to serial port");
+        }
+        if let Err(e) = serial.flush() {
+            eprintln!("  {RED}flush after gdb failed: {e}{RESET}");
+        }
+
+        let greeting = read_until_verbose(serial, "exit GDB mode", Duration::from_secs(3));
+
+        if greeting.contains("GDB RSP active") {
+            eprintln!("  {GREEN}✓{RESET} GDB greeting confirmed");
+            drain_for(serial, Duration::from_millis(200));
+            let _ = serial.clear(serialport::ClearBuffer::All);
+            return; // Success!
+        }
+
+        // Greeting not seen — probe RSP directly
+        eprintln!("  {YELLOW}GDB greeting not seen ({} bytes: {:?}) — probing RSP...{RESET}",
+            greeting.len(), &greeting[..greeting.len().min(120)]);
+        drain_for(serial, Duration::from_millis(100));
+        let _ = serial.clear(serialport::ClearBuffer::All);
+
+        if verify_rsp_packet(serial) {
+            eprintln!("  {GREEN}✓{RESET} RSP probe confirmed — hub is in GDB mode");
+            return; // Success despite missing greeting
+        }
+
+        eprintln!("  {RED}RSP probe failed (attempt {attempt}/2){RESET}");
+    }
+
+    die(
+        "Hub is NOT in RSP mode after 2 attempts.\n\
+         Possible causes:\n\
+         - No binary loaded (upload failed?)\n\
+         - Demo crashed before GDB stub could activate\n\
+         - Serial communication issue\n\
+         Check hub state with: cargo xtask port",
+    );
+}
+
+/// Send an RSP status query ($?#3f) and check for a valid RSP response.
+/// Returns true if the hub responds with RSP-framed data ($ or +).
+/// This is safe: consuming the stop reply has no side effect because the
+/// target is genuinely halted (dwt::is_halted() stays true), so GDB's
+/// subsequent $? will still get T05.
+fn verify_rsp_packet(serial: &mut Box<dyn SerialPort>) -> bool {
+    let _ = serial.write_all(b"$?#3f");
+    let _ = serial.flush();
+    let resp = read_until_timeout(serial, Duration::from_millis(1500));
+
+    // RSP response: + (ack) followed by $T05#b9 or $S05#b8
+    // Shell response: echo/ERR text without $ or +
+    let is_rsp = resp.contains('$') || resp.starts_with('+');
+    if is_rsp {
+        // Drain any trailing RSP data
+        drain_for(serial, Duration::from_millis(100));
+        let _ = serial.clear(serialport::ClearBuffer::All);
+    } else if !resp.is_empty() {
+        eprintln!("  {DIM}RSP probe got: {:?}{RESET}",
+            resp.chars().take(80).collect::<String>());
+    }
+    is_rsp
+}
+
+/// After dropping the serial port, briefly re-open it, send an RSP probe,
+/// and confirm the hub is still in GDB mode. This catches issues where
+/// dropping the port (DTR, HUPCL) kicked the hub out of RSP mode.
+fn verify_rsp_after_release(port: &str) {
+    // Small settle time for kernel tty cleanup
+    std::thread::sleep(Duration::from_millis(300));
+
+    let serial = serialport::new(port, BAUD)
+        .timeout(Duration::from_millis(200))
+        .open();
+    let mut serial = match serial {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{YELLOW}Warning: post-release verify skipped (cannot open {port}: {e}){RESET}");
+            return;
+        }
+    };
+
+    // The DTR rising edge resets host_synced. We need to send something
+    // so feed() sets host_synced=true before the stub can respond.
+    // Our $? packet serves this purpose.
+    let _ = serial.write_all(b"$?#3f");
+    let _ = serial.flush();
+    let resp = read_until_timeout(&mut serial, Duration::from_millis(1500));
+
+    let is_rsp = resp.contains('$') || resp.starts_with('+');
+    if is_rsp {
+        eprintln!("  {GREEN}✓{RESET} Post-release RSP verified");
+    } else {
+        eprintln!("{RED}ERROR: Hub exited RSP mode after port release!{RESET}");
+        eprintln!("  {DIM}Got: {:?}{RESET}", resp.chars().take(80).collect::<String>());
+        drop(serial);
+        die("Hub is no longer in RSP mode — debug session will fail");
+    }
+
+    // Clean up for GDB
+    drain_for(&mut serial, Duration::from_millis(100));
+    let _ = serial.clear(serialport::ClearBuffer::All);
+    drop(serial);
+
+    // Re-apply stty after our verification open/close cycle
+    configure_tty(port);
+}
+
+/// Start a socat TCP→serial bridge so CodeLLDB can connect via TCP.
+/// CodeLLDB's `process connect --plugin gdb-remote serial://` doesn't
+/// work, but `localhost:3333` does.  Kills any previous bridge first.
+fn start_gdb_bridge(port: &str) {
+    // Kill any existing bridge
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", &format!("socat.*TCP-LISTEN:{GDB_TCP_PORT}")])
+        .status();
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Start socat: TCP listen on GDB_TCP_PORT ↔ serial port (raw, 115200)
+    // - fork: accept multiple connections (survives client disconnect/reconnect)
+    // - process_group(0): new process group so SIGHUP from VS Code task
+    //   terminal close doesn't kill socat
+    let child = std::process::Command::new("socat")
+        .args([
+            &format!("TCP-LISTEN:{GDB_TCP_PORT},reuseaddr,fork"),
+            &format!("FILE:{port},b115200,raw,echo=0"),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0)
+        .spawn();
+
+    match child {
+        Ok(c) => {
+            // Brief pause so socat binds the port before CodeLLDB connects
+            std::thread::sleep(Duration::from_millis(200));
+            eprintln!("{GREEN}✓{RESET} GDB bridge: localhost:{GDB_TCP_PORT} → {port} (socat pid {})", c.id());
+        }
+        Err(e) => {
+            eprintln!("{YELLOW}Warning: cannot start socat bridge: {e}{RESET}");
+            eprintln!("{YELLOW}  Install socat or use gdb-multiarch with serial://{RESET}");
+        }
+    }
+}
+
+/// Write a JSON state file that chain participants (launch configs, scripts)
+/// can read to know the hub's current state.
+fn write_hub_state_file(port: &str, demo: &str, elf: &Path) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let content = format!(
+        concat!(
+            "{{\n",
+            "  \"mode\": \"rsp\",\n",
+            "  \"port\": \"{}\",\n",
+            "  \"symlink\": \"{}\",\n",
+            "  \"demo\": \"{}\",\n",
+            "  \"elf\": \"{}\",\n",
+            "  \"timestamp\": {},\n",
+            "  \"pid\": {}\n",
+            "}}\n"
+        ),
+        port, SYMLINK, demo, elf.display(), now, std::process::id()
+    );
+    match fs::write(STATE_FILE, &content) {
+        Ok(()) => {}
+        Err(e) => eprintln!("{YELLOW}Warning: cannot write {STATE_FILE}: {e}{RESET}"),
+    }
 }
 
 fn cmd_build(args: &[String]) {
@@ -409,14 +900,16 @@ fn cmd_upload(args: &[String]) {
 
     let mut serial = open_serial_robust(&port);
     ensure_shell_mode(&mut serial);
-    send_line(&mut serial, "stop");
-    drain_for(&mut serial, Duration::from_millis(300));
+    send_line(&mut serial, "kill");
+    drain_for(&mut serial, Duration::from_millis(500));
 
     let bin_data = fs::read(&bin_path).unwrap_or_else(|e| {
         die(&format!("Cannot read {}: {e}", bin_path.display()));
     });
+    sync_shell_or_die(&mut serial, "upload");
     upload_binary(&mut serial, &bin_data);
 
+    sync_shell_or_die(&mut serial, "go");
     send_line(&mut serial, "go");
     eprintln!("{GREEN}✓{RESET} Demo '{name}' running on {port}");
 }
@@ -548,6 +1041,24 @@ fn elf_path(root: &Path, name: &str) -> PathBuf {
     ))
 }
 
+/// Check if a demo requires privileged mode (`go!`).
+///
+/// Scans the first 20 lines of the demo source for the marker
+/// `MUST run with \`go!\`` (used by reg_dump, pwm_diag, etc.).
+/// Returns "go!" if found, "go" otherwise.
+fn detect_go_command<'a>(root: &Path, name: &str) -> &'a str {
+    let src = root.join(format!("examples/{name}.rs"));
+    if let Ok(content) = fs::read_to_string(&src) {
+        // Only check the doc-comment header (first 20 lines)
+        for line in content.lines().take(20) {
+            if line.contains("MUST run with") && line.contains("go!") {
+                return "go!";
+            }
+        }
+    }
+    "go"
+}
+
 fn demo_root() -> PathBuf {
     // Walk up from CWD looking for Cargo.toml with [workspace] that
     // has hub-ram-demo.x (our linker script).
@@ -582,8 +1093,54 @@ fn demo_root() -> PathBuf {
 
 // ── Serial port detection ───────────────────────────────────
 
+/// Find a SPIKE hub serial port by USB interface number.
+///
+/// With dual-CDC firmware, interface 0 = shell, interface 2 = GDB RSP.
+/// Falls back to `/dev/spike-shell` or `/dev/spike-gdb` symlinks (udev).
+fn find_hub_port_by_interface(iface_num: u8) -> Option<String> {
+    // Check udev symlinks first (fastest, most reliable)
+    let symlink = match iface_num {
+        0 => "/dev/spike-shell",
+        2 => "/dev/spike-gdb",
+        _ => "",
+    };
+    if !symlink.is_empty() && std::path::Path::new(symlink).exists() {
+        return Some(symlink.to_string());
+    }
+
+    // Scan sysfs for matching VID:PID + interface number
+    if let Ok(entries) = fs::read_dir("/sys/class/tty") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("ttyACM") {
+                continue;
+            }
+            let base = format!("/sys/class/tty/{name}/device/..");
+            let vid = fs::read_to_string(format!("{base}/idVendor")).unwrap_or_default();
+            let pid = fs::read_to_string(format!("{base}/idProduct")).unwrap_or_default();
+            if vid.trim() != "0694" || pid.trim() != "0042" {
+                continue;
+            }
+            // Read bInterfaceNumber from the interface directory
+            let iface = fs::read_to_string(format!("/sys/class/tty/{name}/device/bInterfaceNumber"))
+                .unwrap_or_default();
+            let iface_str = format!("{:02}", iface_num);
+            if iface.trim() == iface_str {
+                return Some(format!("/dev/{name}"));
+            }
+        }
+    }
+
+    None
+}
+
 fn find_hub_port() -> Option<String> {
-    // Use serialport crate to enumerate USB serial ports by VID:PID
+    // Prefer interface-based detection (dual-CDC aware)
+    if let Some(port) = find_hub_port_by_interface(0) {
+        return Some(port);
+    }
+
+    // Legacy fallback: any port with matching VID:PID
     if let Ok(ports) = serialport::available_ports() {
         for p in &ports {
             if let SerialPortType::UsbPort(usb) = &p.port_type {
@@ -594,33 +1151,13 @@ fn find_hub_port() -> Option<String> {
         }
     }
 
-    // Fallback: scan sysfs
-    if let Ok(entries) = fs::read_dir("/sys/class/tty") {
-        let mut acm_ports: Vec<String> = entries
-            .flatten()
-            .filter_map(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                if !name.starts_with("ttyACM") {
-                    return None;
-                }
-                let vid_path = format!("/sys/class/tty/{name}/device/../idVendor");
-                let pid_path = format!("/sys/class/tty/{name}/device/../idProduct");
-                let vid = fs::read_to_string(&vid_path).ok()?;
-                let pid = fs::read_to_string(&pid_path).ok()?;
-                if vid.trim() == "0694" && pid.trim() == "0042" {
-                    Some(format!("/dev/{name}"))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        acm_ports.sort();
-        if let Some(port) = acm_ports.into_iter().next() {
-            return Some(port);
-        }
-    }
-
     None
+}
+
+/// Find the GDB RSP serial port (interface 2 / ttyACM1).
+/// Returns None if not found (single-CDC firmware or not plugged in).
+fn find_gdb_port() -> Option<String> {
+    find_hub_port_by_interface(2)
 }
 
 fn find_hub_port_or_die() -> String {
@@ -663,11 +1200,90 @@ fn open_serial_robust(port: &str) -> Box<dyn SerialPort> {
     }
 }
 
+/// Re-detect the hub port (it may have changed after a reboot/watchdog
+/// reset) and open a fresh serial connection.  Waits up to 8 seconds for
+/// the hub to re-enumerate on USB.
+fn reopen_or_die() -> Box<dyn SerialPort> {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if let Some(port) = find_hub_port() {
+            ensure_port_free(&port);
+            match serialport::new(&port, BAUD)
+                .timeout(Duration::from_millis(100))
+                .open()
+            {
+                Ok(s) => {
+                    eprintln!("  {GREEN}✓{RESET} Reopened {CYAN}{port}{RESET}");
+                    return s;
+                }
+                Err(_) => {}
+            }
+        }
+        if Instant::now() > deadline {
+            die("Hub did not re-enumerate within 8 seconds after reboot");
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
 fn send_line(serial: &mut Box<dyn SerialPort>, cmd: &str) {
     let mut data = cmd.as_bytes().to_vec();
     data.extend_from_slice(b"\r\n");
-    let _ = serial.write_all(&data);
-    let _ = serial.flush();
+    if let Err(e) = serial.write_all(&data) {
+        eprintln!("{RED}send_line write error: {e}{RESET}");
+    }
+    if let Err(e) = serial.flush() {
+        eprintln!("{RED}send_line flush error: {e}{RESET}");
+    }
+}
+
+/// Synchronize with the shell: send an empty line, wait for `spike>`.
+///
+/// This serves two critical purposes:
+///   1. **Triggers `host_synced`** on the hub — until the host sends
+///      at least one byte, the firmware's USB ISR gates all output drain.
+///      After DTR rising edge (port open), `host_synced` is false and
+///      any queued output (READY, prompt, etc.) is silently held.
+///   2. **Confirms the serial link is alive** — if the hub crashed,
+///      rebooted, or the tty fd went stale, we detect it here.
+///
+/// Tries twice (the first attempt may arrive during a USB/shell
+/// transition after RSP detach where the hub is briefly unresponsive).
+/// Returns `true` if `spike>` was seen, `false` otherwise.
+fn sync_shell(serial: &mut Box<dyn SerialPort>) -> bool {
+    for attempt in 1..=3 {
+        drain(serial);
+        send_line(serial, "");
+        let resp = read_until(serial, "spike>", Duration::from_secs(2));
+        if resp.contains("spike>") {
+            return true;
+        }
+        if attempt < 3 {
+            eprintln!("  {DIM}sync_shell: no prompt (attempt {attempt}/3), retrying...{RESET}");
+            // After RSP detach the hub can be sluggish — give it time
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    }
+    false
+}
+
+/// Like `sync_shell` but recovers from broken-pipe / stale fd by
+/// re-detecting the hub port and reopening.  Dies only if all
+/// recovery attempts fail.
+fn sync_shell_or_die(serial: &mut Box<dyn SerialPort>, context: &str) {
+    if sync_shell(serial) {
+        return;
+    }
+    // The fd may be stale (hub re-enumerated, ttyACM number changed).
+    // Try to find the hub again and reopen.
+    eprintln!("  {YELLOW}sync_shell failed — attempting port re-detection...{RESET}");
+    let new = reopen_or_die();
+    *serial = new;
+    if sync_shell(serial) {
+        eprintln!("  {GREEN}✓{RESET} Recovered on {}", serial.name().unwrap_or_default());
+        return;
+    }
+    die(&format!("Shell sync failed before {context} — hub not responding after reopen"));
 }
 
 fn drain(serial: &mut Box<dyn SerialPort>) {
@@ -710,6 +1326,59 @@ fn read_until(serial: &mut Box<dyn SerialPort>, needle: &str, timeout: Duration)
             _ => std::thread::sleep(Duration::from_millis(20)),
         }
     }
+    String::from_utf8_lossy(&acc).into_owned()
+}
+
+/// Like read_until, but logs detailed error/timeout statistics.
+/// Use for diagnosing "0 bytes received" failures.
+fn read_until_verbose(serial: &mut Box<dyn SerialPort>, needle: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    let mut buf = [0u8; 512];
+    let mut acc = Vec::new();
+    let mut timeout_count = 0u32;
+    let mut err_count = 0u32;
+    let mut first_err: Option<String> = None;
+
+    while Instant::now() < deadline {
+        match serial.read(&mut buf) {
+            Ok(n) if n > 0 => {
+                acc.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&acc);
+                if text.contains(needle) {
+                    return text.into_owned();
+                }
+            }
+            Ok(_) => {
+                // Ok(0) — shouldn't happen with blocking reads but count it
+                timeout_count += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                timeout_count += 1;
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(ref e) => {
+                err_count += 1;
+                if first_err.is_none() {
+                    first_err = Some(format!("{e} (kind: {:?})", e.kind()));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+
+    // Log diagnostics when needle was NOT found
+    eprintln!("  {DIM}read_until_verbose({:?}): {} bytes, {} timeouts, {} errors{RESET}",
+        needle, acc.len(), timeout_count, err_count);
+    if let Some(e) = first_err {
+        eprintln!("  {RED}  first read error: {e}{RESET}");
+    }
+    if !acc.is_empty() {
+        let show = acc.len().min(80);
+        eprintln!("  {DIM}  raw: {:?}{RESET}",
+            String::from_utf8_lossy(&acc[..show]));
+    }
+
     String::from_utf8_lossy(&acc).into_owned()
 }
 
@@ -781,14 +1450,20 @@ fn create_symlink(port: &str) {
 /// HUPCL (drops DTR on close, racing USB) and local echo (doubles
 /// characters).  This persists until device re-enumeration.
 fn configure_tty(port: &str) {
-    let status = Command::new("stty")
+    let result = Command::new("stty")
         .args(["-F", port, "115200", "raw", "-echo", "-hupcl"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    match status {
-        Ok(s) if s.success() => {}
-        _ => eprintln!("{YELLOW}Warning: stty failed for {port} (non-fatal){RESET}"),
+        .output();
+    match result {
+        Ok(out) if out.status.success() => {
+            eprintln!("  {DIM}stty: OK{RESET}");
+        }
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            eprintln!("{YELLOW}Warning: stty failed for {port}: {}{RESET}", err.trim());
+        }
+        Err(e) => {
+            eprintln!("{YELLOW}Warning: stty exec failed: {e}{RESET}");
+        }
     }
 }
 

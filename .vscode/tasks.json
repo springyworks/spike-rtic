@@ -79,6 +79,15 @@
 			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
 			"problemMatcher": "$rustc"
 		},
+		{
+			"label": "xtask-debug-reg-dump",
+			"type": "shell",
+			"command": "cargo",
+			"args": ["run", "--", "debug", "reg_dump"],
+			"options": { "cwd": "${workspaceFolder}/examples/hub-ram-demos/xtask" },
+			"presentation": { "reveal": "always", "panel": "shared", "clear": true },
+			"problemMatcher": "$rustc"
+		},
 
 		// ── Firmware build ──
 		{

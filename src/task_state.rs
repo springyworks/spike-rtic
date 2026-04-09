@@ -59,6 +59,12 @@ pub fn is_active(id: u8) -> bool {
     ACTIVE.load(Ordering::Relaxed) & (1 << id) != 0
 }
 
+/// Return the raw active-task bitmap for crash diagnostics.
+#[inline]
+pub fn active_bitmap() -> u32 {
+    ACTIVE.load(Ordering::Relaxed)
+}
+
 /// Pause auto-detect (port_detect will skip spawning sensor_poll).
 #[inline]
 pub fn pause_auto_detect() {

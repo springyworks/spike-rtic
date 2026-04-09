@@ -67,6 +67,7 @@ use crate::sound;
 use crate::task_state;
 use crate::sandbox;
 use crate::upload;
+use crate::watchdog;
 
 /// Maximum input line length (bytes).  Longer lines are silently truncated.
 const MAX_LINE: usize = 80;
@@ -77,6 +78,9 @@ const MAX_LINE: usize = 80;
 /// so this only needs to hold the largest interactive response
 /// (help ≈ 1 KB, clocks ≈ 700 B).  4 KB is generous.
 const OUT_SIZE: usize = 4 * 1024;
+
+/// GDB RSP output buffer size — drains to dedicated gdb_serial (ttyACM1).
+const GDB_OUT_SIZE: usize = 2 * 1024;
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -168,6 +172,13 @@ pub struct Shell {
     last_dtr: bool,
     /// GDB RSP stub — active when shell is in "Demon mode".
     gdb: gdb_rsp::GdbStub,
+    /// GDB output buffer — separate from shell output.
+    /// Drained to gdb_serial (ttyACM1) by the USB ISR.
+    gdb_out: [u8; GDB_OUT_SIZE],
+    /// Number of valid bytes in `gdb_out`.
+    gdb_out_len: usize,
+    /// Number of bytes already sent to the GDB CDC endpoint.
+    gdb_out_sent: usize,
 }
 
 impl Shell {
@@ -196,6 +207,9 @@ impl Shell {
             host_synced: false,
             last_dtr: false,
             gdb: gdb_rsp::GdbStub::new(),
+            gdb_out: [0u8; GDB_OUT_SIZE],
+            gdb_out_len: 0,
+            gdb_out_sent: 0,
         }
     }
 
@@ -312,19 +326,58 @@ impl Shell {
         self.gdb.active
     }
 
+    /// Push data to the GDB output buffer (for gdb_serial / ttyACM1).
+    fn push_gdb(&mut self, data: &[u8]) {
+        let space = GDB_OUT_SIZE - self.gdb_out_len;
+        let n = data.len().min(space);
+        self.gdb_out[self.gdb_out_len..self.gdb_out_len + n].copy_from_slice(&data[..n]);
+        self.gdb_out_len += n;
+    }
+
+    /// Feed incoming bytes from gdb_serial (ttyACM1) to the GDB stub.
+    /// Output goes to `gdb_out` (drained to gdb_serial by the ISR).
+    pub fn feed_gdb(&mut self, data: &[u8]) {
+        if !self.gdb.active {
+            return; // GDB port data ignored when stub inactive
+        }
+        let mut gdb_tmp = [0u8; 1024];
+        let n = self.gdb.feed(data, &mut gdb_tmp);
+        if n > 0 {
+            self.push_gdb(&gdb_tmp[..n]);
+        }
+        if !self.gdb.active {
+            self.push(b"\r\nGDB detached. Back to shell.\r\nspike> ");
+        }
+    }
+
     /// Poll GDB halt status without incoming data.
     /// Called from the USB ISR every 5ms (via usb_flush pend) to detect
     /// when DebugMonitor halts the target and send T05 to GDB.
+    /// Output goes to `gdb_out` (gdb_serial / ttyACM1).
     pub fn poll_gdb(&mut self) {
         if self.gdb.active {
             let mut gdb_tmp = [0u8; 1024];
             let n = self.gdb.feed(&[], &mut gdb_tmp);
             if n > 0 {
-                self.push(&gdb_tmp[..n]);
+                self.push_gdb(&gdb_tmp[..n]);
             }
             if !self.gdb.active {
                 self.push(b"\r\nGDB detached. Back to shell.\r\nspike> ");
             }
+        }
+    }
+
+    /// Return a slice of bytes waiting to be sent over gdb_serial.
+    pub fn gdb_pending(&self) -> &[u8] {
+        &self.gdb_out[self.gdb_out_sent..self.gdb_out_len]
+    }
+
+    /// Mark `n` bytes as successfully written to the GDB CDC endpoint.
+    pub fn gdb_advance(&mut self, n: usize) {
+        self.gdb_out_sent += n;
+        if self.gdb_out_sent >= self.gdb_out_len {
+            self.gdb_out_sent = 0;
+            self.gdb_out_len = 0;
         }
     }
 
@@ -425,19 +478,10 @@ impl Shell {
             }
         }
 
-        // ── GDB RSP mode ("Demon mode"): route bytes to GDB stub ──
-        if self.gdb.active {
-            let mut gdb_tmp = [0u8; 1024];
-            let n = self.gdb.feed(data, &mut gdb_tmp);
-            if n > 0 {
-                self.push(&gdb_tmp[..n]);
-            }
-            // If stub deactivated (detach/kill), print return message
-            if !self.gdb.active {
-                self.push(b"\r\nGDB detached. Back to shell.\r\nspike> ");
-            }
-            return;
-        }
+        // ── GDB RSP mode: shell stays active even when GDB is active ──
+        // GDB data comes via feed_gdb() on the dedicated gdb_serial port.
+        // Shell commands on the shell port are always processed normally,
+        // so the user can type 'kill', 'help', etc. during debug sessions.
 
         // ── Normal shell mode ──
         for &b in data {
@@ -576,6 +620,7 @@ impl Shell {
                 self.push(b"  version         - firmware version + API version\r\n");
                 self.push(b"  time            - human-readable uptime (Hh MMm SSs)\r\n");
                 self.push(b"  unixtime        - pseudo unix timestamp from boot\r\n");
+                self.push(b"  crash           - watchdog crash report (prev boot)\r\n");
                 self.push(b"  test_all        - ballet: probe ports, exercise everything\r\n");
                 self.push(b"  reconnect-ser   - drop USB serial 2 s (terminal reconnect)\r\n");
                 self.push(b"--- External Flash (SPI2, 32 MB) ---\r\n");
@@ -593,7 +638,7 @@ impl Shell {
                 self.push(b"  dwt clear [n]       - disarm watchpoint (all if no n)\r\n");
                 self.push(b"  dwt init            - re-init DWT + DebugMonitor\r\n");
                 self.push(b"--- GDB remote debug (Demon mode) ---\r\n");
-                self.push(b"  gdb               - enter GDB RSP stub mode\r\n");
+                self.push(b"  gdbrsp            - enter GDB RSP stub mode\r\n");
                 self.push(b"  bye|quit|exit  - end session (= reconnect-ser)\r\n");
                 self.push(b"  dfu            - print DFU flash instructions\r\n");
                 self.push(b"  off            - clean power off (release PA13)\r\n");
@@ -619,6 +664,116 @@ impl Shell {
                     let mut w2 = BufWriter::new(&mut tmp2);
                     let _ = write!(w2, "PREV FAULT: MMFSR=0x{:02X} addr=0x{:08X}\r\n", mmfsr, addr);
                     self.push(w2.written());
+                }
+
+                // Previous-boot watchdog crash record
+                if watchdog::last_crash_record().is_some() {
+                    self.push(b"WATCHDOG CRASH on prev boot - type 'crash' for details\r\n");
+                }
+            }
+            "crash" => {
+                if let Some(rec) = watchdog::last_crash_record() {
+                    self.push(b"=== WATCHDOG RESET (previous boot) ===\r\n");
+
+                    // Uptime
+                    let secs = rec.uptime as u32 / 2; // heartbeat is 500ms
+                    let mut tmp = [0u8; 80];
+                    let mut w = BufWriter::new(&mut tmp);
+                    let _ = write!(w, "Last heartbeat: tick {} (~{}s after boot)\r\n",
+                        rec.uptime, secs);
+                    self.push(w.written());
+                    self.push(b"IWDG timeout: ~5s => crash ~5s after snapshot\r\n");
+
+                    // BASEPRI
+                    let mut tmp2 = [0u8; 100];
+                    let mut w2 = BufWriter::new(&mut tmp2);
+                    if rec.basepri == 0 {
+                        let _ = write!(w2, "BASEPRI: 0x00 (open — NOT the cause*)\r\n");
+                    } else {
+                        let prio = rec.basepri >> 4;
+                        let _ = write!(w2,
+                            "BASEPRI: 0x{:02X} (blocking pri>={} — SUSPECT)\r\n",
+                            rec.basepri, prio);
+                    }
+                    self.push(w2.written());
+
+                    // PRIMASK
+                    if rec.primask != 0 {
+                        self.push(b"PRIMASK: 1 (IRQs DISABLED - SUSPECT)\r\n");
+                    } else {
+                        self.push(b"PRIMASK: 0 (IRQs enabled)\r\n");
+                    }
+
+                    // LR (EXC_RETURN)
+                    let mut tmp3 = [0u8; 80];
+                    let mut w3 = BufWriter::new(&mut tmp3);
+                    let lr_desc = match rec.lr {
+                        0xFFFF_FFF1 => "Handler mode (nested exception)",
+                        0xFFFF_FFF9 => "Thread/MSP (RTIC task)",
+                        0xFFFF_FFFD => "Thread/PSP (sandbox user app)",
+                        _ => "unknown",
+                    };
+                    let _ = write!(w3, "LR: 0x{:08X} ({})\r\n", rec.lr, lr_desc);
+                    self.push(w3.written());
+
+                    // Active tasks — decode bitmap
+                    self.push(b"Tasks: ");
+                    const TASK_NAMES: &[&[u8]] = &[
+                        b"heartbeat ", b"banner ", b"shell ",
+                        b"boot_beep ", b"beep ", b"button ",
+                        b"sensor ", b"run_demo ", b"rtty ",
+                        b"test_all ", b"reconn ", b"pid ",
+                        b"servo ", b"motor ", b"sensor2 ", b"motor2 ",
+                    ];
+                    let mut any = false;
+                    for (i, name) in TASK_NAMES.iter().enumerate() {
+                        if rec.tasks & (1 << i) != 0 {
+                            self.push(name);
+                            any = true;
+                        }
+                    }
+                    if !any { self.push(b"(none)"); }
+                    self.push(b"\r\n");
+
+                    // Context flags
+                    let mut tmp4 = [0u8; 60];
+                    let mut w4 = BufWriter::new(&mut tmp4);
+                    let _ = write!(w4, "GDB: {}  Sandbox: {}\r\n",
+                        if rec.gdb_active { "ACTIVE" } else { "no" },
+                        if rec.sandboxed { "ACTIVE" } else { "no" });
+                    self.push(w4.written());
+
+                    // Analysis
+                    self.push(b"--- Analysis ---\r\n");
+                    if rec.basepri >= 0xE0 {
+                        self.push(b"BASEPRI>=0xE0 masks pri-2 (heartbeat).\r\n");
+                        self.push(b"Likely: force_kill_sandbox left BASEPRI up.\r\n");
+                    } else if rec.primask != 0 {
+                        self.push(b"PRIMASK=1: all IRQs disabled. Code path\r\n");
+                        self.push(b"entered critical section and never left.\r\n");
+                    } else if rec.basepri == 0 {
+                        self.push(b"BASEPRI=0: masking was NOT the cause.\r\n");
+                        self.push(b"*Caveat: snapshot is from LAST SUCCESSFUL\r\n");
+                        self.push(b" heartbeat. If BASEPRI was raised AFTER\r\n");
+                        self.push(b" this tick, the snapshot missed it.\r\n");
+                        if !rec.sandboxed && rec.tasks & (1 << 7) != 0 {
+                            self.push(b"run_demo ACTIVE + not sandboxed = go!\r\n");
+                            self.push(b"Privileged demo could corrupt anything.\r\n");
+                        }
+                    } else {
+                        let mut tmp5 = [0u8; 80];
+                        let mut w5 = BufWriter::new(&mut tmp5);
+                        let _ = write!(w5,
+                            "BASEPRI=0x{:02X}: unusual. Check what sets it.\r\n",
+                            rec.basepri);
+                        self.push(w5.written());
+                    }
+                    if rec.gdb_active {
+                        self.push(b"GDB was active: DebugMon WFE halt can\r\n");
+                        self.push(b"starve heartbeat if events are lost.\r\n");
+                    }
+                } else {
+                    self.push(b"No watchdog crash on previous boot.\r\n");
                 }
             }
             "led" => {
@@ -864,6 +1019,43 @@ impl Shell {
 
                 // Request demo launch — always handled by RTIC run_demo task
                 user_app_io::request(addr, sandboxed);
+            }
+
+            "debug" => {
+                // Combined go + gdb for debug sessions.
+                // Runs the demo in Thread mode (privileged, no MPU) so
+                // DebugMonitor can halt it for GDB breakpoints.
+                // Plants a BKPT at the demo entry to halt on first instruction.
+                if user_app_io::is_running() {
+                    self.push(b"ERR: demo already running\r\n");
+                    return;
+                }
+
+                let addr = parts.next().and_then(|s| parse_num(s))
+                    .unwrap_or(upload::upload_buf_addr());
+
+                if addr < 0x2004_0000 || addr >= 0x2005_0000 {
+                    self.push(b"ERR: addr outside SRAM2 (0x20040000..0x20050000)\r\n");
+                    return;
+                }
+
+                let mut tmp = [0u8; 80];
+                let mut w = BufWriter::new(&mut tmp);
+                let _ = write!(w, "debug 0x{:08X} [GDB+privileged+Thread]\r\n", addr);
+                self.push(w.written());
+
+                // Discard any stale demo output from a previous run.
+                // Without this, bytes already in user_app_io::BUF can
+                // drain to serial between auto_detach (active=false) and
+                // enter_debug (active=true), corrupting the GDB stream.
+                user_app_io::reset();
+
+                // Enter GDB/RSP mode with entry BKPT (before starting demo)
+                let msg = self.gdb.enter_debug(addr);
+                self.push(msg);
+
+                // Request demo in debug mode — runs from idle in Thread mode
+                user_app_io::request_debug(addr);
             }
 
             "kill" => {
@@ -2871,7 +3063,7 @@ impl Shell {
             }
 
             // ── GDB RSP stub ("Demon mode") ──
-            "gdb" | "demon" => {
+            "gdbrsp" | "gdb" | "demon" => {
                 let msg = self.gdb.enter();
                 self.push(msg);
             }

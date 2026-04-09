@@ -172,6 +172,7 @@ mod app {
     struct Shared {
         usb_dev: UsbDevice<'static, UsbBus<usb_serial::SpikeUsbOtg>>,
         serial: SerialPort<'static, UsbBus<usb_serial::SpikeUsbOtg>>,
+        gdb_serial: SerialPort<'static, UsbBus<usb_serial::SpikeUsbOtg>>,
         shell: shell::Shell,
         sensor: sensor::SensorState,
         motor_state: sensor::SensorState,
@@ -212,6 +213,8 @@ mod app {
         // clear the old state).  Sound must be initialized first.
         if watchdog::was_iwdg_reset() {
             watchdog::watchdog_reset_chime();
+            // Read the crash record before SRAM2 is overwritten
+            unsafe { watchdog::read_and_store_crash_record(); }
         }
 
         // ── External SPI flash (W25Q256JV, 32 MB on SPI2) ──
@@ -256,7 +259,7 @@ mod app {
 
         // ── USB CDC serial ──
         let usb_bus = unsafe { usb_serial::init() };
-        let (serial, usb_dev) = usb_serial::create_device(usb_bus);
+        let (serial, gdb_serial, usb_dev) = usb_serial::create_device(usb_bus);
 
         // ── Start monotonic (96 MHz HCLK) ──
         Mono::start(cx.core.SYST, 96_000_000);
@@ -284,6 +287,7 @@ mod app {
             Shared {
                 usb_dev,
                 serial,
+                gdb_serial,
                 shell: shell::Shell::new(),
                 sensor: sensor::SensorState::new(),
                 motor_state: sensor::SensorState::new(),
@@ -305,13 +309,21 @@ mod app {
         loop {
             let addr = sandbox::demo_pending();
             if addr != 0 {
-                let api = sandbox::build_sandboxed_api();
-                match unsafe { sandbox::run_sandboxed(addr, &api) } {
-                    Ok(result) => {
-                        sandbox::complete_sandbox(result, false);
-                    }
-                    Err(fault) => {
-                        sandbox::complete_sandbox(fault, true);
+                if sandbox::is_debug_run() {
+                    // Debug mode: privileged Thread mode, no MPU.
+                    // DebugMonitor can halt this for GDB breakpoints.
+                    let api = user_app_io::build_api();
+                    let result = unsafe { sandbox::run_debug(addr, &api) };
+                    sandbox::complete_sandbox(result, false);
+                } else {
+                    let api = sandbox::build_sandboxed_api();
+                    match unsafe { sandbox::run_sandboxed(addr, &api) } {
+                        Ok(result) => {
+                            sandbox::complete_sandbox(result, false);
+                        }
+                        Err(fault) => {
+                            sandbox::complete_sandbox(fault, true);
+                        }
                     }
                 }
             } else {
@@ -329,11 +341,11 @@ mod app {
     ///
     /// Firmware ISRs (priority 2+) preempt user-app tasks (priority 1)
     /// and Thread-mode sandbox, so output drains in real-time.
-    #[task(binds = OTG_FS, shared = [usb_dev, serial, shell, sensor, motor_state], priority = 2)]
+    #[task(binds = OTG_FS, shared = [usb_dev, serial, gdb_serial, shell, sensor, motor_state], priority = 2)]
     fn usb_interrupt(cx: usb_interrupt::Context) {
-        (cx.shared.usb_dev, cx.shared.serial, cx.shared.shell, cx.shared.sensor, cx.shared.motor_state).lock(
-            |usb_dev, serial, shell, sensor_state, motor_state| {
-                let had_activity = usb_dev.poll(&mut [serial]);
+        (cx.shared.usb_dev, cx.shared.serial, cx.shared.gdb_serial, cx.shared.shell, cx.shared.sensor, cx.shared.motor_state).lock(
+            |usb_dev, serial, gdb_serial, shell, sensor_state, motor_state| {
+                let had_activity = usb_dev.poll(&mut [serial, gdb_serial]);
 
                 // ── Host (re)connect detection ──
                 // DTR rising edge: host opened the serial port.
@@ -344,6 +356,8 @@ mod app {
                     shell.usb_disconnected();
                 }
 
+                // ── Shell I/O (serial / ttyACM0) ──
+                let mut gdb_fed = false;
                 if had_activity {
                     let mut buf = [0u8; 64];
                     match serial.read(&mut buf) {
@@ -351,14 +365,26 @@ mod app {
                             task_state::mark_usb_rx();
                             shell.feed(&buf[..count], sensor_state, motor_state);
                         }
-                        _ => {
-                            // No data from host — still poll GDB halt status
-                            // so T05 stop-replies reach GDB even when it's silent.
-                            shell.poll_gdb();
-                        }
+                        _ => {}
                     }
-                } else {
-                    // usb_flush pended us with no USB activity — poll GDB
+
+                    // ── GDB I/O (gdb_serial / ttyACM1) ──
+                    match gdb_serial.read(&mut buf) {
+                        Ok(count) if count > 0 => {
+                            task_state::mark_usb_rx();
+                            shell.feed_gdb(&buf[..count]);
+                            gdb_fed = true;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Poll GDB halt status — T05 responses go to gdb_out.
+                // Skip when feed_gdb() just ran: it already processed halt
+                // detection, and the DebugMonitor handler (lower priority)
+                // hasn't had a chance to clear TARGET_HALTED yet — polling
+                // now would send a stale T05 with old registers.
+                if !gdb_fed {
                     shell.poll_gdb();
                 }
 
@@ -443,28 +469,23 @@ mod app {
                 if let Some(addr) = user_app_io::take_sandbox_request() {
                     run_demo::spawn(addr).ok();
                 }
+                if let Some(addr) = user_app_io::take_debug_request() {
+                    run_demo::spawn(addr).ok();
+                }
 
-                // Drain demo subprocess output buffer — but NOT in
-                // GDB mode, where raw demo text would corrupt the RSP
-                // stream.  In GDB mode the demo is halted anyway; any
-                // buffered text is flushed after GDB detaches.
-                if !shell.is_gdb_active() {
-                    let demo_out = user_app_io::pending();
-                    if !demo_out.is_empty() {
-                        match serial.write(demo_out) {
-                            Ok(n) if n > 0 => { task_state::mark_usb_tx(); user_app_io::advance(n); }
-                            _ => {}
-                        }
+                // Drain demo subprocess output to shell port (ttyACM0).
+                // With dual-CDC, demo output always goes to the shell port —
+                // no mode gating needed.
+                let demo_out = user_app_io::pending();
+                if !demo_out.is_empty() {
+                    match serial.write(demo_out) {
+                        Ok(n) if n > 0 => { task_state::mark_usb_tx(); user_app_io::advance(n); }
+                        _ => {}
                     }
                 }
 
-                // Drain shell output — gated by host_synced.
-                // Before the host sends its first byte, any output (stale
-                // banner from boot) is held in shell.out[] and never reaches
-                // the USB hardware.  The first feed() clears stale output,
-                // sets host_synced = true, and from then on output drains
-                // normally.  This eliminates the race where banner bytes
-                // in the USB endpoint FIFO mix with the first command.
+                // Drain shell output to shell port (ttyACM0).
+                // Gated by host_synced — see comment below.
                 if shell.is_synced() {
                     let pending = shell.pending();
                     if !pending.is_empty() {
@@ -472,6 +493,15 @@ mod app {
                             Ok(n) if n > 0 => { task_state::mark_usb_tx(); shell.advance(n); }
                             _ => {}
                         }
+                    }
+                }
+
+                // Drain GDB RSP output to GDB port (ttyACM1).
+                let gdb_pending = shell.gdb_pending();
+                if !gdb_pending.is_empty() {
+                    match gdb_serial.write(gdb_pending) {
+                        Ok(n) if n > 0 => { task_state::mark_usb_tx(); shell.gdb_advance(n); }
+                        _ => {}
                     }
                 }
             },
@@ -484,9 +514,11 @@ mod app {
         task_state::mark_active(task_state::HEARTBEAT);
         let mut on = false;
         let mut sent_banner = false;
+        let mut ticks: u32 = 0;
 
         loop {
             on = !on;
+            ticks = ticks.wrapping_add(1);
             led_matrix::set_pixel(12, if on { 30 } else { 5 });
 
             // USB activity indicator on tiny LED near USB port (BATTERY_LED)
@@ -515,6 +547,7 @@ mod app {
             }
 
             watchdog::feed();
+            unsafe { watchdog::snapshot(ticks); }
             Mono::delay(500.millis()).await;
         }
     }
@@ -1587,9 +1620,25 @@ mod app {
         }
 
         let sandboxed = user_app_io::is_sandbox_mode();
+        let debug_mode = user_app_io::is_debug_mode();
         let result_val;
 
-        if sandboxed {
+        if debug_mode {
+            // ── Debug mode: delegate to idle (Thread mode, privileged) ──
+            // Runs in Thread mode so DebugMonitor can halt for GDB breakpoints.
+            // No MPU restrictions — demo has full peripheral access.
+            // Status LED: yellow = debug
+            led_matrix::set_status_rgb(pins::STATUS_TOP, 0x8000, 0x6000, 0);
+            unsafe { led_matrix::update() };
+
+            sandbox::request_debug_run(addr);
+            while !sandbox::sandbox_done() {
+                watchdog::feed();
+                Mono::delay(1.millis()).await;
+            }
+            let (result, _faulted) = sandbox::sandbox_result();
+            result_val = result;
+        } else if sandboxed {
             // ── Sandboxed mode: delegate to idle (Thread mode) ──
             // SVC can only fire from Thread mode (SVCall priority 0xF0
             // is lower than any RTIC dispatcher in Handler mode).

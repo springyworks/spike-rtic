@@ -59,6 +59,10 @@ static PENDING: AtomicU32 = AtomicU32::new(0);
 /// False for privileged `go!` mode.
 static SANDBOX_MODE: AtomicBool = AtomicBool::new(true);
 
+/// True if the pending demo should run in debug mode (Thread mode,
+/// privileged, no MPU — allows DebugMonitor to halt for GDB breakpoints).
+static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+
 /// Last demo entry address — set in `request()` so button short-press
 /// can re-run the last demo without knowing which binary was loaded.
 static LAST_RUN_ADDR: AtomicU32 = AtomicU32::new(0);
@@ -85,6 +89,16 @@ static JMPBUF_VALID: AtomicBool = AtomicBool::new(false);
 pub fn request(addr: u32, sandboxed: bool) {
     LAST_RUN_ADDR.store(addr, Ordering::Release);
     SANDBOX_MODE.store(sandboxed, Ordering::Release);
+    DEBUG_MODE.store(false, Ordering::Release);
+    PENDING.store(addr, Ordering::Release);
+}
+
+/// Request a demo launch in debug mode (Thread mode, privileged, no MPU).
+/// The demo runs from idle so DebugMonitor can halt it for GDB breakpoints.
+pub fn request_debug(addr: u32) {
+    LAST_RUN_ADDR.store(addr, Ordering::Release);
+    SANDBOX_MODE.store(false, Ordering::Release);
+    DEBUG_MODE.store(true, Ordering::Release);
     PENDING.store(addr, Ordering::Release);
 }
 
@@ -96,6 +110,12 @@ pub fn last_run_addr() -> u32 {
 /// Check if the pending/running demo is in sandbox mode.
 pub fn is_sandbox_mode() -> bool {
     SANDBOX_MODE.load(Ordering::Acquire)
+}
+
+/// Check if the pending/running demo is in debug mode
+/// (Thread mode, privileged, no MPU — for GDB breakpoints).
+pub fn is_debug_mode() -> bool {
+    DEBUG_MODE.load(Ordering::Acquire)
 }
 
 /// Take a pending RTTY spawn request (returns true once, then false).
@@ -111,10 +131,10 @@ pub fn request_rtty_spawn() {
 }
 
 /// Take a pending demo request (returns 0 if none).
-/// Only takes NON-sandboxed (privileged) requests for the RTIC task.
-/// Sandboxed requests are left for the idle loop.
+/// Only takes NON-sandboxed, NON-debug (privileged) requests for the RTIC task.
+/// Sandboxed and debug requests are left for the idle loop.
 pub fn take_privileged_request() -> Option<u32> {
-    if SANDBOX_MODE.load(Ordering::Acquire) {
+    if SANDBOX_MODE.load(Ordering::Acquire) || DEBUG_MODE.load(Ordering::Acquire) {
         return None; // leave for idle
     }
     let addr = PENDING.swap(0, Ordering::AcqRel);
@@ -126,6 +146,16 @@ pub fn take_privileged_request() -> Option<u32> {
 pub fn take_sandbox_request() -> Option<u32> {
     if !SANDBOX_MODE.load(Ordering::Acquire) {
         return None; // not a sandbox request
+    }
+    let addr = PENDING.swap(0, Ordering::AcqRel);
+    if addr != 0 { Some(addr) } else { None }
+}
+
+/// Take a pending DEBUG demo request (returns 0 if none).
+/// Called from the USB ISR to spawn run_demo (which delegates to idle).
+pub fn take_debug_request() -> Option<u32> {
+    if !DEBUG_MODE.load(Ordering::Acquire) {
+        return None;
     }
     let addr = PENDING.swap(0, Ordering::AcqRel);
     if addr != 0 { Some(addr) } else { None }

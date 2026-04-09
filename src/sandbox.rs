@@ -121,6 +121,10 @@ static DEMO_DONE: AtomicBool = AtomicBool::new(false);
 /// True if the sandbox run faulted (result contains MMFSR).
 static DEMO_WAS_FAULT: AtomicBool = AtomicBool::new(false);
 
+/// True when the pending DEMO_PENDING is a debug run (privileged Thread
+/// mode, no MPU) instead of a sandboxed run.
+static DEBUG_RUN: AtomicBool = AtomicBool::new(false);
+
 /// Saved abort context: [0] = MSP before demo, [1] = resume PC (label 2).
 /// SVCall handler reads these to build a fake MSP exception frame on kill.
 static mut ABORT_CTX: [u32; 2] = [0; 2];
@@ -131,6 +135,16 @@ pub fn request_sandbox(addr: u32) {
     DEMO_WAS_FAULT.store(false, Ordering::Relaxed);
     DEMO_RESULT.store(0, Ordering::Relaxed);
     // Release: all stores above visible before addr is published
+    DEMO_PENDING.store(addr, Ordering::Release);
+}
+
+/// Request debug execution from idle (Thread mode, privileged, no MPU).
+/// Uses the same DEMO_PENDING/DEMO_DONE mechanism as sandbox.
+pub fn request_debug_run(addr: u32) {
+    DEBUG_RUN.store(true, Ordering::Relaxed);
+    DEMO_DONE.store(false, Ordering::Relaxed);
+    DEMO_WAS_FAULT.store(false, Ordering::Relaxed);
+    DEMO_RESULT.store(0, Ordering::Relaxed);
     DEMO_PENDING.store(addr, Ordering::Release);
 }
 
@@ -156,6 +170,22 @@ pub fn sandbox_done() -> bool {
 /// Get sandbox result and fault status. Call after sandbox_done().
 pub fn sandbox_result() -> (u32, bool) {
     (DEMO_RESULT.load(Ordering::Relaxed), DEMO_WAS_FAULT.load(Ordering::Relaxed))
+}
+
+/// Check if the pending demo is a debug run (privileged Thread mode).
+pub fn is_debug_run() -> bool {
+    DEBUG_RUN.load(Ordering::Acquire)
+}
+
+/// Run a demo in Thread mode, privileged, no MPU.
+/// This allows DebugMonitor to halt the demo for GDB breakpoints.
+///
+/// # Safety
+/// `addr` must point to a valid Thumb function in SRAM2.
+pub unsafe fn run_debug(addr: u32, api: *const spike_hub_api::MonitorApi) -> u32 {
+    let entry: extern "C" fn(*const spike_hub_api::MonitorApi) -> u32 =
+        core::mem::transmute(addr | 1);
+    entry(api)
 }
 
 /// Check if MPU is available on this chip.
@@ -839,7 +869,17 @@ unsafe fn redirect_to_abort_landing(sentinel: u32) -> ! {
 
     // Set MSP to the fake frame and exception-return to Thread/MSP.
     // Hardware pops the frame → MSP = saved_msp → label 2.
+    //
+    // CRITICAL: Reset BASEPRI to 0 before bx lr.  If force_kill_sandbox
+    // is called from an ISR holding an RTIC lock (e.g. USB ISR running
+    // shell → kill -9), BASEPRI is elevated to mask priority ≤ 2.
+    // The exception return does NOT restore BASEPRI (it's not in the
+    // exception frame).  Without clearing it, Thread mode resumes with
+    // priority 2 tasks permanently masked → heartbeat starved →
+    // watchdog fires after ~5 seconds.
     core::arch::asm!(
+        "mov r0, #0",
+        "msr BASEPRI, r0",
         "msr MSP, {msp}",
         "mov lr, {exc}",
         "bx lr",

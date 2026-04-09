@@ -16,11 +16,15 @@
             "name": "Debug open file (LLDB)",
             "type": "lldb",
             "request": "custom",
+            "initCommands": [
+                "settings set plugin.process.gdb-remote.packet-timeout 30",
+                "settings set target.default-arch thumbv7em"
+            ],
             "targetCreateCommands": [
                 "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/${fileBasenameNoExtension}"
             ],
             "processCreateCommands": [
-                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+                "gdb-remote localhost:3333"
             ],
             "sourceMap": { "/": "/" },
             "preLaunchTask": "xtask-debug-open-file"
@@ -40,7 +44,7 @@
                 { "text": "set mem inaccessible-by-default off" },
                 { "text": "set architecture arm" },
                 { "text": "set arm force-mode thumb" },
-                { "text": "target remote /tmp/spike-hub" }
+                { "text": "target remote /tmp/spike-gdb" }
             ],
             "sourceFileMap": {
                 "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
@@ -54,11 +58,15 @@
             "name": "Debug demo (LLDB)",
             "type": "lldb",
             "request": "custom",
+            "initCommands": [
+                "settings set plugin.process.gdb-remote.packet-timeout 30",
+                "settings set target.default-arch thumbv7em"
+            ],
             "targetCreateCommands": [
                 "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/${input:demoName}"
             ],
             "processCreateCommands": [
-                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+                "gdb-remote localhost:3333"
             ],
             "sourceMap": { "/": "/" },
             "preLaunchTask": "xtask-debug-pick"
@@ -78,7 +86,7 @@
                 { "text": "set mem inaccessible-by-default off" },
                 { "text": "set architecture arm" },
                 { "text": "set arm force-mode thumb" },
-                { "text": "target remote /tmp/spike-hub" }
+                { "text": "target remote /tmp/spike-gdb" }
             ],
             "sourceFileMap": {
                 "examples": "${workspaceFolder}/examples/hub-ram-demos/examples",
@@ -92,11 +100,15 @@
             "name": "Quick: gdb_simple (LLDB)",
             "type": "lldb",
             "request": "custom",
+            "initCommands": [
+                "settings set plugin.process.gdb-remote.packet-timeout 30",
+                "settings set target.default-arch thumbv7em"
+            ],
             "targetCreateCommands": [
                 "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple"
             ],
             "processCreateCommands": [
-                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+                "gdb-remote localhost:3333"
             ],
             "sourceMap": { "/": "/" },
             "preLaunchTask": "xtask-debug-gdb-simple"
@@ -105,14 +117,35 @@
             "name": "Quick: gdb_exercise (LLDB)",
             "type": "lldb",
             "request": "custom",
+            "initCommands": [
+                "settings set plugin.process.gdb-remote.packet-timeout 30",
+                "settings set target.default-arch thumbv7em"
+            ],
             "targetCreateCommands": [
                 "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise"
             ],
             "processCreateCommands": [
-                "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+                "gdb-remote localhost:3333"
             ],
             "sourceMap": { "/": "/" },
             "preLaunchTask": "xtask-debug-gdb-exercise"
+        },
+        {
+            // "name": "Quick: reg_dump (LLDB)",
+            "type": "lldb",
+            "request": "custom",
+            "initCommands": [
+                "settings set plugin.process.gdb-remote.packet-timeout 30",
+                "settings set target.default-arch thumbv7em"
+            ],
+            "targetCreateCommands": [
+                "target create ${workspaceFolder}/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/reg_dump"
+            ],
+            "processCreateCommands": [
+                "gdb-remote localhost:3333"
+            ],
+            "sourceMap": { "/": "/" },
+            "preLaunchTask": "xtask-debug-reg-dump"
         }
     ],
     "inputs": [

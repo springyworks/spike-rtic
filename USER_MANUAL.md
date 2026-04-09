@@ -14,6 +14,7 @@ Bare-metal Rust firmware for the **LEGO SPIKE Prime Hub** using **RTIC v2**.An i
   - [1 Quick Start](#1-quick-start)
     - [1.1 Build \& Flash](#11-build--flash)
     - [1.2 Connect to the Shell](#12-connect-to-the-shell)
+      - [Using `cat` / `echo` (no terminal emulator)](#using-cat--echo-no-terminal-emulator)
     - [1.3 Upload \& Run a RAM Demo](#13-upload--run-a-ram-demo)
   - [2 Shell Commands](#2-shell-commands)
     - [2.1 General](#21-general)
@@ -604,11 +605,11 @@ All demos are in `[examples/hub-ram-demos/](examples/hub-ram-demos/)`.
 
 ### 5.1 Entering DFU Mode
 
-Three ways to enter DFU:
+Two steps to enter DFU:
 
-1. **Button hold:** hold **left button** while firmware is running
-2. **Power-on combo:** hold **center + left** while inserting USB / pressing center
-
+1. ** Remove USB connector (do it at the PC side to spare the tiny usb socket of the hub)
+2. **Button hold:** hold **left arrowed button** while firmware is running
+3. **Hold bt-button  (right-top)**insert  USB > bt led will go cycling-colors after 6 or 7 seconds, relase bt-button ; you are now in DFU mode and ready to flash the firmware
 The hub re-enumerates as `0694:0011` (LEGO DFU device).  
 Verify with: `lsusb | grep 0694`
 

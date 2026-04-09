@@ -183,6 +183,11 @@ pub fn set_gdb_active(active: bool) {
     GDB_ACTIVE.store(if active { 1 } else { 0 }, Ordering::Release);
 }
 
+/// Check if GDB RSP stub is active (for crash diagnostics).
+pub fn gdb_is_active() -> bool {
+    GDB_ACTIVE.load(Ordering::Acquire) != 0
+}
+
 /// Full debug-state cleanup for GDB detach / auto-detach.
 ///
 /// Clears SINGLE_STEP_REQUEST, MON_STEP (DEMCR bit 18) and
@@ -466,7 +471,12 @@ unsafe extern "C" fn debugmon_inner(regs_ptr: *const u32, frame_ptr: *const u32,
 
     // Spin-wait with WFE to save power. The RSP stub sets RESUME_REQUEST
     // and the USB interrupt wakes us via SEV (event register).
+    //
+    // Feed the watchdog on every WFE wake.  The heartbeat task (priority 2)
+    // *should* preempt us and feed it, but during long GDB halts any
+    // missed heartbeat would cause a spurious reset.  Belt-and-suspenders.
     while RESUME_REQUEST.load(Ordering::Acquire) == 0 {
+        crate::watchdog::feed();
         core::arch::asm!("wfe");
     }
 

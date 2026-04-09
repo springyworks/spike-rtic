@@ -32,7 +32,7 @@ stm32f4 = { version = "0.15", features = ["stm32f413", "rt"] }
 
 # USB CDC serial
 synopsys-usb-otg = { version = "0.4", features = ["fs", "cortex-m"] }
-usb-device = "0.3"
+usb-device = { version = "0.3", features = ["control-buffer-256"] }
 usbd-serial = "0.2"
 
 # Panic handler

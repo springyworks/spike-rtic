@@ -113,7 +113,41 @@ impl HubState {
 }
 
 fn detect_hub() -> HubState {
-    // 1. Look for ttyACM* with LEGO VID (0694)
+    // 1. Check udev symlink first (fastest, most reliable)
+    if std::path::Path::new("/dev/spike-shell").exists() {
+        return HubState::Running("/dev/spike-shell".into());
+    }
+
+    // 2. Scan sysfs for ttyACM with LEGO VID + shell interface (00)
+    if let Ok(entries) = fs::read_dir("/sys/class/tty") {
+        let mut spike_ports: Vec<(String, String)> = Vec::new(); // (dev, iface)
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with("ttyACM") {
+                continue;
+            }
+            let base = format!("/sys/class/tty/{name}/device/..");
+            let vid = fs::read_to_string(format!("{base}/idVendor")).unwrap_or_default();
+            let pid = fs::read_to_string(format!("{base}/idProduct")).unwrap_or_default();
+            if vid.trim() != "0694" || pid.trim() != "0042" {
+                continue;
+            }
+            let iface = fs::read_to_string(format!("/sys/class/tty/{name}/device/bInterfaceNumber"))
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            spike_ports.push((format!("/dev/{name}"), iface));
+        }
+        // Prefer interface 00 (shell), fall back to any SPIKE port
+        if let Some((port, _)) = spike_ports.iter().find(|(_, iface)| iface == "00") {
+            return HubState::Running(port.clone());
+        }
+        if let Some((port, _)) = spike_ports.first() {
+            return HubState::Running(port.clone());
+        }
+    }
+
+    // 3. Legacy fallback: any ttyACM with LEGO VID via /dev scan
     if let Ok(entries) = fs::read_dir("/dev") {
         let mut acm: Vec<String> = entries
             .flatten()
@@ -128,10 +162,8 @@ fn detect_hub() -> HubState {
             .collect();
         acm.sort();
 
-        // Try to verify LEGO VID via sysfs
         for port in &acm {
             let dev = port.strip_prefix("/dev/").unwrap_or(port);
-            // sysfs path: /sys/class/tty/<dev>/device/../idVendor
             let vid_path = format!("/sys/class/tty/{dev}/device/../idVendor");
             if let Ok(vid) = fs::read_to_string(&vid_path) {
                 if vid.trim() == "0694" {
@@ -139,13 +171,9 @@ fn detect_hub() -> HubState {
                 }
             }
         }
-        // Fallback: any ttyACM is probably the hub
-        if let Some(port) = acm.first() {
-            return HubState::Running(port.clone());
-        }
     }
 
-    // 2. Check lsusb for DFU mode (VID:PID 0694:0011)
+    // 4. Check lsusb for DFU mode (VID:PID 0694:0011)
     if let Ok(out) = Command::new("lsusb").output() {
         let text = String::from_utf8_lossy(&out.stdout).to_lowercase();
         if text.contains("0694:0011") {
@@ -231,6 +259,104 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+// ── Port-kicker ─────────────────────────────────────────────
+
+/// Find PIDs holding `port` open via fuser, then lsof fallback.
+fn find_port_users(port: &str) -> Vec<(u32, String)> {
+    let my_pid = std::process::id();
+    let mut users = Vec::new();
+
+    // Try fuser
+    if let Ok(out) = Command::new("fuser")
+        .arg(port)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for tok in text.split_whitespace() {
+            let clean = tok.trim_end_matches('m').trim_end_matches('e');
+            if let Ok(pid) = clean.parse::<u32>() {
+                if pid != my_pid {
+                    users.push((pid, pid_cmdline(pid)));
+                }
+            }
+        }
+    }
+    if !users.is_empty() { return users; }
+
+    // Fallback: lsof
+    if let Ok(out) = Command::new("lsof")
+        .args(["-t", port])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+    {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Ok(pid) = line.trim().parse::<u32>() {
+                if pid != my_pid {
+                    users.push((pid, pid_cmdline(pid)));
+                }
+            }
+        }
+    }
+    users
+}
+
+fn pid_cmdline(pid: u32) -> String {
+    fs::read_to_string(format!("/proc/{pid}/comm"))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Kill processes holding `port`. SIGTERM first, SIGKILL if they persist.
+fn kill_port_users(port: &str) -> bool {
+    let users = find_port_users(port);
+    if users.is_empty() { return true; }
+
+    println!("  {YELLOW}Port {port} locked by:{RESET}");
+    for (pid, cmd) in &users {
+        println!("    PID {pid}: {cmd}");
+    }
+
+    // SIGTERM
+    for (pid, _) in &users {
+        let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    }
+    std::thread::sleep(Duration::from_millis(800));
+
+    // Survivors → SIGKILL
+    let remaining = find_port_users(port);
+    if !remaining.is_empty() {
+        for (pid, _) in &remaining {
+            println!("    {DIM}SIGKILL PID {pid}{RESET}");
+            let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    let still = find_port_users(port);
+    if still.is_empty() {
+        println!("  {GREEN}✓ Port freed{RESET}");
+        true
+    } else {
+        println!("  {RED}✗ Could not free {port}{RESET}");
+        false
+    }
+}
+
+/// Ensure port is free — kill holders if needed, or die.
+fn ensure_port_free(port: &str) {
+    if find_port_users(port).is_empty() { return; }
+    if !kill_port_users(port) {
+        println!("  {RED}Cannot free {port} — close the blocking process manually{RESET}");
+        exit(1);
+    }
+    std::thread::sleep(Duration::from_millis(300));
+}
+
 // ── Serial helper (uses Python/pyserial) ────────────────────
 
 /// Configure the Linux tty for raw serial access so `cat`/`echo` work.
@@ -243,6 +369,7 @@ fn configure_tty(port: &str) {
 }
 
 fn send_serial_cmd(port: &str, cmd: &str) {
+    ensure_port_free(port);
     let script = format!(
         "import serial,time; s=serial.Serial('{}',115200,timeout=1); \
          s.write(b'{}\\r\\n'); time.sleep(0.5); s.close()",
@@ -630,13 +757,15 @@ fn cmd_connect(root: &Path) {
     let hub = detect_hub();
     match hub {
         HubState::Running(ref port) => {
+            // Kill any process holding the port
+            ensure_port_free(port);
             // Configure tty for raw access (so cat/echo also work after exiting)
             configure_tty(port);
             println!("  Connecting to hub on {CYAN}{port}{RESET}...");
             println!("  {DIM}(Ctrl-C to exit){RESET}");
             println!();
 
-            // Try picocom → miniterm → spike_hub_controller.py
+            // Try picocom → miniterm → hub.py
             let picocom_ok = Command::new("which")
                 .arg("picocom")
                 .output()
@@ -667,11 +796,11 @@ fn cmd_connect(root: &Path) {
                 return;
             }
 
-            let shbc = root.join("helper-tools/spike_hub_controller.py");
+            let shbc = root.join("helper-tools/hub.py");
             if shbc.exists() {
                 let _ = Command::new("python3")
                     .arg(&shbc)
-                    .arg("shell")
+                    .arg("cmd")
                     .stdin(Stdio::inherit())
                     .stdout(Stdio::inherit())
                     .stderr(Stdio::inherit())
@@ -705,6 +834,94 @@ fn cmd_status(root: &Path) {
         hub.label(),
         RESET
     );
+
+    // Port map — show all ttyACM with USB identity
+    println!();
+    println!("  {BOLD}USB Serial Ports{RESET}");
+    println!("  {}", "─".repeat(68));
+    println!(
+        "  {:<16} {:<12} {:<5} {:<8} {:<20} {}",
+        "Device", "VID:PID", "IF", "Role", "Symlink", "Product"
+    );
+    println!(
+        "  {:<16} {:<12} {:<5} {:<8} {:<20} {}",
+        "─".repeat(15), "─".repeat(11), "─".repeat(4), "─".repeat(7), "─".repeat(19), "─".repeat(15)
+    );
+
+    let tty_class = "/sys/class/tty";
+    let mut any_spike = false;
+    if let Ok(entries) = fs::read_dir("/dev") {
+        let mut acm: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n.starts_with("ttyACM") {
+                    Some(n)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        acm.sort();
+
+        for name in &acm {
+            let dev = format!("/dev/{name}");
+            let base = format!("{tty_class}/{name}/device/..");
+            let vid = fs::read_to_string(format!("{base}/idVendor"))
+                .unwrap_or_default().trim().to_string();
+            let pid = fs::read_to_string(format!("{base}/idProduct"))
+                .unwrap_or_default().trim().to_string();
+            let iface = fs::read_to_string(format!("{tty_class}/{name}/device/bInterfaceNumber"))
+                .unwrap_or_default().trim().to_string();
+            let product = fs::read_to_string(format!("{base}/product"))
+                .unwrap_or_default().trim().to_string();
+
+            let vid_pid = if vid.is_empty() { "????:????".into() }
+                          else { format!("{vid}:{pid}") };
+
+            let (role, role_color) = if vid == "0694" && pid == "0042" {
+                any_spike = true;
+                match iface.as_str() {
+                    "00" => ("shell", GREEN),
+                    "02" => ("gdb", CYAN),
+                    _ => ("spike?", YELLOW),
+                }
+            } else {
+                ("other", DIM)
+            };
+
+            // Check symlinks
+            let mut sym = String::new();
+            for s in ["/dev/spike-shell", "/dev/spike-gdb"] {
+                if let Ok(target) = fs::read_link(s) {
+                    if target.to_string_lossy().ends_with(name.as_str()) {
+                        sym = s.to_string();
+                    }
+                }
+            }
+
+            println!(
+                "  {:<16} {:<12} {:<5} {}{:<8}{} {:<20} {}",
+                dev, vid_pid, iface, role_color, role, RESET, sym, product
+            );
+        }
+
+        if acm.is_empty() {
+            println!("  {DIM}(no ttyACM ports found){RESET}");
+        }
+    }
+
+    // Symlink health check
+    if any_spike {
+        for (sym, _expected) in [("/dev/spike-shell", "00"), ("/dev/spike-gdb", "02")] {
+            if !std::path::Path::new(sym).exists() {
+                println!();
+                println!("  {YELLOW}⚠  {sym} missing. Install udev rules:{RESET}");
+                println!("     sudo cp helper-tools/99-spike-hub.rules /etc/udev/rules.d/");
+                println!("     sudo udevadm control --reload-rules && sudo udevadm trigger");
+            }
+        }
+    }
 
     // Tool availability
     println!();

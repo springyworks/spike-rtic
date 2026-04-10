@@ -2,13 +2,23 @@
 """Raw RSP protocol test — bypasses GDB to test firmware RSP stub directly."""
 import serial, time, subprocess, os, sys, socket
 
+# ── Project root: $PROJECT_ROOT or derived from this script's location ──
+PROJECT_ROOT = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import find_shell_port, find_gdb_port, open_serial
+
 def setup_debug():
     """Ensure hub is in debug mode with socat bridge."""
     # Kill stale socat
     os.system("fuser -k 3333/tcp 2>/dev/null")
     time.sleep(0.3)
     
-    s = serial.Serial('/dev/spike-shell', 115200, timeout=2)
+    s = open_serial(find_shell_port() or '/dev/spike-shell', 115200, timeout=2)
     time.sleep(0.3)
     s.reset_input_buffer()
     
@@ -29,7 +39,7 @@ def setup_debug():
     # Start socat
     proc = subprocess.Popen(
         ['socat', 'TCP-LISTEN:3333,reuseaddr,fork',
-         'FILE:/dev/spike-gdb,b115200,raw,echo=0'],
+         f'FILE:{find_gdb_port() or "/dev/spike-gdb"},b115200,raw,echo=0'],
         preexec_fn=os.setsid
     )
     time.sleep(0.5)

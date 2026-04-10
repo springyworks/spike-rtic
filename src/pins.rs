@@ -197,3 +197,27 @@ pub const BLUETOOTH_LED: (u8, u8, u8) = (20, 19, 18); // R, G, B
 // ADC thresholds for button resistor ladder
 pub const BUTTON_CENTER_THRESHOLD: u32 = 3200;
 pub const LR_LEVELS: [u32; 8] = [3872, 3394, 3009, 2755, 2538, 2327, 2141, 1969];
+
+// ── Battery charger (MP2639A) ──
+//
+// The charger MODE pin is routed through TLC5955 channel 14 (not a
+// regular GPIO).  When the GS value is 0 the TLC5955 channel is off
+// and the MODE pin is pulled LOW by its external pull-down → charge
+// mode (buck).  Setting ch14 to max sinks current through the pull-up
+// circuit, pulling MODE HIGH → discharge mode (boost).
+//
+// The charger /CHG (STAT) signal shares a resistor ladder with the
+// center button on ADC ch14 (PC4).  Three inputs create 8 discrete
+// voltage levels decoded as a 3-bit flags word:
+//   bit 0 (CH_0) = center button pressed
+//   bit 1 (CH_1) = unused input
+//   bit 2 (CH_2) = /CHG active (LOW = battery is charging)
+//
+// Thresholds from Pybricks RESISTOR_LADDER_DEV_0:
+pub const CHARGER_MODE_CH: u8 = 14;
+pub const RLAD_CENTER: [u32; 8] = [3642, 3142, 2879, 2634, 2449, 2209, 2072, 1800];
+
+// NTC healthy range: 30%–74% of VCC (3.3 V).
+// ADC is 12-bit (0–4095), so thresholds are 0.30*4095 ≈ 1229 and 0.74*4095 ≈ 3030.
+pub const NTC_LOW_THRESHOLD: u32 = 1229;
+pub const NTC_HIGH_THRESHOLD: u32 = 3030;

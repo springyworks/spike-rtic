@@ -1,5 +1,9 @@
 # dev\_notes/ — Index & Status (2026-04-03)
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [Helper Tools](../helper-tools/README.md)
+
+---
+
 Guide to all documentation in this folder. Files categorized by role and freshness.
 
 ## Legend

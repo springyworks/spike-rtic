@@ -347,6 +347,11 @@ pub fn demo_set_port(idx: u8) {
     }
 }
 
+/// Return the demo's active sensor port index (0–5), or 0xFF if unset.
+pub fn demo_active_port() -> usize {
+    DEMO_PORT_IDX.load(Ordering::Acquire) as usize
+}
+
 /// Demo callback: drain ring buffer, keepalive, return latest data.
 /// Returns number of valid bytes copied into `buf`.
 pub fn demo_sensor_read(buf: &mut [u8]) -> usize {

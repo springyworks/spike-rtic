@@ -14,7 +14,6 @@
 //!
 //! Upload & run:
 //!   python3 ../../helper-tools/upload_demo.py pwm_diag.bin
-//!   # or: python3 ../../helper-tools/spike_hub_controller.py upload pwm_diag.bin
 
 #![no_std]
 #![no_main]

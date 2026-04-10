@@ -1,0 +1,100 @@
+This is an incredibly cool project! Running Rust RTIC on a LEGO Spike hub (which uses an ARM Cortex-M microcontroller, typically an STM32) and building a custom firmware/user-app ecosystem is serious embedded engineering.
+
+Since you are explicitly dealing with **privileged** vs. **unprivileged** execution, you are running into the classic Operating System boundary problem. When your user app is running unprivileged, it cannot directly access protected hardware peripherals, the NVIC (interrupt controller), or memory regions protected by the MPU (Memory Protection Unit). 
+
+To bridge this gap and let the unprivileged app use your firmware functions safely, you have two main architectural choices. Here is how you can solve it.
+
+---
+
+### Method 1: The Canonical ARM Way – Supervisor Calls (`SVC`)
+
+If your user app is truly unprivileged, the hardware-enforced way to access privileged firmware functions is through the **`SVC` (Supervisor Call)** instruction. This is exactly how Linux or RTOS system calls work.
+
+When the unprivileged app executes `SVC`, the ARM core immediately triggers a hardware exception, elevates its privilege level to "Handler Mode," and jumps to the `SVCall` exception handler inside your firmware.
+
+**How to implement it:**
+
+1.  **Define an ABI (Application Binary Interface):** Agree on a set of "System Call Numbers." For example:
+    * Syscall 1: Turn on Motor
+    * Syscall 2: Read Sensor
+    * Syscall 3: Print to Console
+2.  **The User App (Unprivileged):** When the app wants to call a firmware function, it puts the Syscall Number in register `R0`, arguments in `R1`, `R2`, `R3`, and executes `svc 0`.
+    ```rust
+    // User App pseudo-code
+    #[inline(never)]
+    pub extern "C" fn firmware_motor_run(port: u8, speed: i8) {
+        unsafe {
+            core::arch::asm!(
+                "svc 0",
+                inout("r0") 1 => _, // 1 = Motor Run Syscall
+                in("r1") port,
+                in("r2") speed,
+                options(nomem, nostack)
+            );
+        }
+    }
+    ```
+3.  **The Firmware (RTIC):** You bind a task to the `SVCall` interrupt. The firmware reads the stack frame of the unprivileged app to extract `R0`, `R1`, `R2`, and routes it to the actual Rust function.
+    ```rust
+    // Firmware (RTIC)
+    #[task(binds = SVCall, priority = 14)] // High priority
+    fn svcall_handler(cx: svcall_handler::Context) {
+        // 1. Extract the stack frame to read R0 (Syscall Number)
+        // 2. Match on R0
+        //    - if 1: execute motor function using R1 and R2
+        //    - if 2: execute sensor read
+        // 3. Write return values back to the stack frame's R0
+    }
+    ```
+* **Pros:** Highly secure, hardware-enforced, true isolation.
+* **Cons:** Slower than a direct function call (exception entry/exit overhead), requires raw assembly to extract variables from the hardware stack frame.
+
+---
+
+### Method 2: The "Jump Table" (Function Pointer Struct)
+
+If you don't necessarily need strict hardware isolation (e.g., the unprivileged mode is just to prevent accidental crashes rather than malicious hacking), you can pass a struct of function pointers from the firmware to the user app. 
+
+**How to implement it:**
+
+1.  **Define an API Struct:** Create a `#[repr(C)]` struct containing function pointers. Both the firmware and the user app must compile against the exact same definition.
+    ```rust
+    #[repr(C)]
+    pub struct FirmwareAPI {
+        pub set_led_color: extern "C" fn(color: u8),
+        pub get_battery: extern "C" fn() -> u16,
+    }
+    ```
+2.  **The Firmware:** Instantiate this struct in the firmware. When the firmware boots the user app (the `go!` command), it passes the memory address of this struct into the user app's entry point (usually via register `R0`).
+    ```rust
+    // Firmware instantiates the API
+    static API: FirmwareAPI = FirmwareAPI {
+        set_led_color: actual_firmware_set_led_fn,
+        get_battery: actual_firmware_get_batt_fn,
+    };
+
+    // When jumping to user app:
+    // set R0 = &API as *const FirmwareAPI
+    ```
+3.  **The User App:** The entry point receives the pointer, saves it globally, and uses it to call the firmware directly.
+    ```rust
+    // User app uses the pointer
+    static mut FIRMWARE_API: *const FirmwareAPI = core::ptr::null();
+
+    #[no_mangle]
+    pub extern "C" fn main(api_ptr: *const FirmwareAPI) {
+        unsafe { FIRMWARE_API = api_ptr; }
+        
+        // Call the firmware
+        unsafe { ((*FIRMWARE_API).set_led_color)(5); }
+    }
+    ```
+* **Pros:** Extremely fast (just a standard indirect branch `BLX`), very easy to write in Rust without writing custom assembly.
+* **Cons:** **Security/Privilege Issue.** If the user app is running unprivileged, and it calls a function pointer that points to a firmware function, that firmware function will *also execute unprivileged*. If that firmware function tries to write to a protected peripheral register, the ARM core will throw a `HardFault`.
+
+### Which should you choose?
+
+* If your firmware functions **do not** interact with protected memory or require privileged Thread mode, the **Jump Table (Method 2)** is vastly simpler to implement in Rust.
+* If your user app is strictly restricted via the MPU, and your firmware needs to do privileged things (like altering RTIC interrupt masks, talking to protected hardware), you **must use the `SVC` approach (Method 1)** to escalate privileges safely.
+
+A very common hybrid approach is to use a Jump Table, but have the functions inside that Jump Table essentially act as thin wrappers that execute the `SVC` call for the user, hiding the assembly magic from the user-app developer entirely!

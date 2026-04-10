@@ -1,0 +1,27 @@
+# SPIKE Prime Hub — dual CDC-ACM stable symlinks + tty defaults
+#
+# Install:
+#   sudo cp helper-tools/99-spike-hub.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# After plugging in (or hub rebooting from DFU):
+#   /dev/spike-shell  → ttyACMx (shell, always available)
+#   /dev/spike-gdb    → ttyACMy (GDB RSP, dedicated debug port)
+#
+# Both ports are pre-configured: 115200 baud, raw, no echo, no hangup.
+# You can immediately use: echo "ps" > /dev/spike-shell
+#                          cat /dev/spike-shell
+#                          picocom /dev/spike-shell
+#
+# Interface 00 = first CDC function (shell)
+# Interface 02 = second CDC function (GDB RSP)
+
+# Shell port — symlink + stty defaults
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0042", ENV{ID_USB_INTERFACE_NUM}=="00", SYMLINK+="spike-shell", MODE="0666", RUN+="/bin/stty -F /dev/%k 115200 raw -echo -hupcl"
+
+# GDB RSP port — symlink + stty defaults
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0042", ENV{ID_USB_INTERFACE_NUM}=="02", SYMLINK+="spike-gdb", MODE="0666", RUN+="/bin/stty -F /dev/%k 115200 raw -echo -hupcl"
+
+# DFU mode (for flashing firmware)
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0694", ATTRS{idProduct}=="0011", MODE="0666"

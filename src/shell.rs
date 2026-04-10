@@ -554,6 +554,8 @@ impl Shell {
                 self.push(b"  info          - MCU info\r\n");
                 self.push(b"  led <pattern> - heart/check/cross/arrow/usb/clear/all\r\n");
                 self.push(b"  led <0-9>     - show digit\r\n");
+                self.push(b"  led diag      - dump TIM12/SPI1/GPIO state\r\n");
+                self.push(b"  led reinit    - force re-init LED hw if stuck\r\n");
                 self.push(b"  px <i> <b>    - set pixel i brightness b (0-100)\r\n");
                 self.push(b"  status <clr>  - red/green/blue/white/off\r\n");
                 self.push(b"  btn           - read buttons\r\n");
@@ -571,6 +573,7 @@ impl Shell {
                 self.push(b"  go [addr]     - run RAM demo sandboxed (MPU protected)\r\n");
                 self.push(b"  go! [addr]    - run RAM demo privileged (firmware dev)\r\n");
                 self.push(b"  kill [-2|-9|-15] - signal running demo (default: -15/SIGTERM)\r\n");
+                self.push(b"  send <text>   - send text to running demo's input buffer\r\n");
                 self.push(b"  raminfo       - SRAM map & usage\r\n");
                 self.push(b"  ramtest [arg] - RAM test (safe|sram2|addr|all)\r\n");
                 self.push(b"  trace [on|off|clear|legend] - SVC/sensor trace buffer\r\n");
@@ -820,13 +823,35 @@ impl Shell {
                                 self.push(b"ERR: unknown pattern\r\n");
                             }
                         }
+                        "diag" => {
+                            let (tim12, spi1, spi_sr, pb15) = led_matrix::diag();
+                            let mut tmp = [0u8; 200];
+                            let mut w = BufWriter::new(&mut tmp);
+                            let _ = write!(w, "TIM12_CR1: 0x{:04X} (CEN={})\r\n",
+                                tim12, tim12 & 1);
+                            let _ = write!(w, "SPI1_CR1:  0x{:04X} (SPE={} MSTR={})\r\n",
+                                spi1, (spi1 >> 6) & 1, (spi1 >> 2) & 1);
+                            let _ = write!(w, "SPI1_SR:   0x{:04X} (BSY={} TXE={} OVR={})\r\n",
+                                spi_sr, (spi_sr >> 7) & 1, (spi_sr >> 1) & 1, (spi_sr >> 6) & 1);
+                            let _ = write!(w, "PB15 MODER: {} (2=AF)\r\n", pb15);
+                            self.push(w.written());
+                            return;
+                        }
+                        "reinit" => {
+                            let repaired = unsafe { led_matrix::check_health() };
+                            if repaired {
+                                self.push(b"LED hw repaired\r\n");
+                            } else {
+                                self.push(b"LED hw OK\r\n");
+                            }
+                        }
                         _ => {
-                            self.push(b"ERR: unknown pattern. Try: heart check cross arrow usb clear all 0-9\r\n");
+                            self.push(b"ERR: unknown. Try: heart check cross arrow usb clear all diag reinit 0-9\r\n");
                         }
                     }
                     unsafe { led_matrix::update() };
                 } else {
-                    self.push(b"Usage: led <pattern|digit>\r\n");
+                    self.push(b"Usage: led <pattern|digit|diag|reinit>\r\n");
                 }
             }
             "px" => {
@@ -937,19 +962,28 @@ impl Shell {
                 self.rtty_request = true;
             }
             "load" => {
-                // Battery info
+                // Battery info + charger status
                 let v_raw = crate::read_adc(11);
-                let v_mv = v_raw * 6600 / 4095;
+                let v_mv = v_raw * 9900 / 4096;
                 let i_raw = crate::read_adc(10);
                 let ntc_raw = crate::read_adc(8);
                 let usb_raw = crate::read_adc(3);
 
-                let mut tmp = [0u8; 200];
+                let mut tmp = [0u8; 250];
                 let mut w = BufWriter::new(&mut tmp);
                 let _ = write!(w, "Battery:  {} mV (raw {})\r\n", v_mv, v_raw);
                 let _ = write!(w, "Current:  raw {} (ch10)\r\n", i_raw);
-                let _ = write!(w, "NTC:      raw {} (ch8)\r\n", ntc_raw);
+                let _ = write!(w, "NTC:      raw {} (ch8){}\r\n", ntc_raw,
+                    if power::ntc_ok() { "" } else { " FAULT" });
                 let _ = write!(w, "USB chg:  raw {} (ch3)\r\n", usb_raw);
+                let (btn, chg) = power::read_button_and_chg();
+                let ch14_raw = crate::read_adc(14);
+                let iset = power::iset_duty();
+                let _ = write!(w, "Charger:  /CHG={} btn={} VBUS={}\r\n",
+                    if chg { "LOW" } else { "Hi-Z" },
+                    if btn { "YES" } else { "no" },
+                    if power::vbus_present() { "yes" } else { "no" });
+                let _ = write!(w, "ISET:     {}%  ladder={} (thr 3642)\r\n", iset, ch14_raw);
                 if v_mv < power::BATTERY_CRITICAL_MV {
                     let _ = write!(w, "WARNING: battery critically low!\r\n");
                 }
@@ -1086,6 +1120,25 @@ impl Shell {
                         self.push(b"Usage: kill [-2|-9|-15] (default: -15)\r\n");
                     }
                 }
+            }
+
+            "send" => {
+                // Forward remaining text to the running demo's input buffer.
+                if !user_app_io::is_running() {
+                    self.push(b"No demo running.\r\n");
+                    return;
+                }
+                // Collect everything after "send " as the payload.
+                let rest = line.trim_start_matches("send").trim_start();
+                if rest.is_empty() {
+                    self.push(b"Usage: send <text>\r\n");
+                    return;
+                }
+                let n = user_app_io::push_input(rest.as_bytes());
+                let mut tmp = [0u8; 60];
+                let mut w = BufWriter::new(&mut tmp);
+                let _ = write!(w, "sent {} bytes\r\n", n);
+                self.push(w.written());
             }
 
             "raminfo" => {
@@ -1502,18 +1555,18 @@ impl Shell {
                 }
             }
             "bat" => {
-                // Battery readings via ADC
+                // Battery readings via ADC + charger status
                 // ch10 = BAT_CURRENT (PC0), ch11 = BAT_VOLTAGE (PC1),
                 // ch8 = BAT_NTC (PB0), ch3 = USB charger current (PA3)
                 let v_raw = crate::read_adc(11);
                 let i_raw = crate::read_adc(10);
                 let ntc_raw = crate::read_adc(8);
                 let usb_raw = crate::read_adc(3);
-                let mut tmp = [0u8; 48];
+                let mut tmp = [0u8; 64];
 
-                // Voltage: ADC has 3.3V ref, 12-bit; voltage divider ~2:1
-                // so V_bat ≈ raw * 3.3 * 2 / 4095 ≈ raw * 6600 / 4095 mV
-                let mv = (v_raw * 6600) / 4095;
+                // Voltage: ADC has 3.3V ref, 12-bit; voltage divider 3:1 (200k/100k)
+                // Pybricks: raw * 9900 / 4096
+                let mv = (v_raw * 9900) / 4096;
                 let mut w = BufWriter::new(&mut tmp);
                 let _ = write!(w, "Voltage:  {} mV (raw {})\r\n", mv, v_raw);
                 self.push(w.written());
@@ -1523,11 +1576,24 @@ impl Shell {
                 self.push(w.written());
 
                 let mut w = BufWriter::new(&mut tmp);
-                let _ = write!(w, "NTC temp: raw {} (ch8)\r\n", ntc_raw);
+                let _ = write!(w, "NTC temp: raw {} (ch8){}\r\n", ntc_raw,
+                    if power::ntc_ok() { "" } else { " FAULT" });
                 self.push(w.written());
 
                 let mut w = BufWriter::new(&mut tmp);
                 let _ = write!(w, "USB chg:  raw {} (ch3)\r\n", usb_raw);
+                self.push(w.written());
+
+                let (_btn, chg) = power::read_button_and_chg();
+                let ch14_raw = crate::read_adc(14);
+                let iset = power::iset_duty();
+                let mut w = BufWriter::new(&mut tmp);
+                let _ = write!(w, "Charger:  /CHG={} VBUS={}\r\n",
+                    if chg { "LOW(chg)" } else { "Hi-Z" },
+                    if power::vbus_present() { "yes" } else { "no" });
+                self.push(w.written());
+                let mut w = BufWriter::new(&mut tmp);
+                let _ = write!(w, "ISET:     {}%  ladder={} (thr 3642)\r\n", iset, ch14_raw);
                 self.push(w.written());
             }
             "reset" => {

@@ -29,11 +29,23 @@ color-name search since it gives clean IDs.
 """
 
 import serial
+import serial.tools.list_ports
 import time
 import re
 import sys
+import os
 
-PORT = "/dev/ttyACM0"
+# ── Project root: $PROJECT_ROOT or derived from this script's location ──
+PROJECT_ROOT = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import find_shell_port, open_serial, BAUD
+
+PORT = find_shell_port() or "/dev/ttyACM0"
 
 # Color IDs from LEGO color sensor mode 0
 COLOR_NONE = -1
@@ -56,7 +68,7 @@ TARGET_B = COLOR_YELLOW
 
 
 def open_hub():
-    s = serial.Serial(PORT, 115200, timeout=2)
+    s = open_serial(PORT, 115200, timeout=2)
     time.sleep(0.5)
     s.reset_input_buffer()
     s.write(b"\r\n")

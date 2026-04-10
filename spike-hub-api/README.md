@@ -1,5 +1,9 @@
 # spike-hub-api — Shared MonitorApi for SPIKE Prime Hub
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md)
+
+---
+
 Defines the `MonitorApi` callback table — the contract between the
 RTIC monitor firmware and uploaded RAM demos.
 
@@ -42,7 +46,7 @@ the full build-upload-execute workflow.
 
 ## 2. API Fields
 
-Current version: **`API_VERSION = 10`** (24 fields, 96 bytes on 32-bit ARM).
+Current version: **`API_VERSION = 12`** (26 fields, 104 bytes on 32-bit ARM).
 
 | Offset | Field          | Type / Signature                    | Since | Description |
 | ------ | -------------- | ----------------------------------- | ----- | ----------- |
@@ -70,6 +74,8 @@ Current version: **`API_VERSION = 10`** (24 fields, 96 bytes on 32-bit ARM).
 | 0x54   | `imu_init`     | `fn() → u32`                       | v10 | Initialize LSM6DS3TR-C IMU |
 | 0x58   | `imu_read`     | `fn(buf: *mut u8, len: u32) → u32` | v10 | Read IMU data (accel + gyro) |
 | 0x5C   | `set_hub_led`  | `fn(r: u8, g: u8, b: u8)`          | v10 | Set status LED color (RGB) |
+| 0x60   | `wait_event`   | `fn(mask: u32, timeout_ms: u32) → u32` | v11 | Block until event or timeout |
+| 0x64   | `read_input`   | `fn(buf: *mut u8, len: u32) → u32` | v12 | Read host input from `send` command |
 ---
 
 ## 3. Usage
@@ -144,6 +150,8 @@ Dump traces with `trace` in the shell.  See the
 | 8       | Added port_read (read any port's LUMP ring buffer) |
 | 9       | Added sensor_light (set color sensor LED RGB) |
 | 10      | Added imu_init, imu_read, set_hub_led (IMU + status LED) |
+| 11      | Added wait_event — event-driven blocking with EVT_SENSOR/BUTTON/MOTOR/TIMEOUT |
+| 12      | Added read_input, EVT_INPUT — bidirectional host→demo text channel via `send` |
 
 ---
 
@@ -151,9 +159,14 @@ Dump traces with `trace` in the shell.  See the
 
 | Constant          | Value        | Description |
 | ----------------- | ------------ | ----------- |
-| `API_VERSION`     | 10           | Current struct layout version |
+| `API_VERSION`     | 12           | Current struct layout version |
 | `BTN_CENTER`      | 0x01         | Center button flag |
 | `BTN_LEFT`        | 0x02         | Left button flag |
 | `BTN_RIGHT`       | 0x04         | Right button flag |
 | `UPLOAD_BUF_ADDR` | 0x2004_0000  | SRAM2 upload buffer base |
 | `UPLOAD_BUF_SIZE` | 65536        | Upload buffer size (64 KB) |
+| `EVT_SENSOR`      | `1 << 0`     | New sensor data available |
+| `EVT_BUTTON`      | `1 << 1`     | Button state changed |
+| `EVT_MOTOR`       | `1 << 2`     | Motor position changed |
+| `EVT_TIMEOUT`     | `1 << 3`     | Timeout expired (no event fired) |
+| `EVT_INPUT`       | `1 << 4`     | Input data from host `send` command |

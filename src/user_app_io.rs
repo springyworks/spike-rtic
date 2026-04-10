@@ -22,6 +22,19 @@ use spike_hub_api::MonitorApi;
 
 use crate::{led_matrix, motor, power, sensor, sound, rtty};
 
+// ── Input ring buffer (host → demo) ────────────────────────
+
+/// 128-byte ring buffer for `send` command text.
+/// Producer: shell/USB ISR (priority 2).  Consumer: demo task (priority 1).
+/// Higher-priority producer can preempt consumer at any point — safe
+/// because producer only advances IN_W, consumer only advances IN_R.
+const IN_SIZE: usize = 128;
+static mut IN_BUF: [u8; IN_SIZE] = [0; IN_SIZE];
+/// Write cursor (producer only).
+static IN_W: AtomicUsize = AtomicUsize::new(0);
+/// Read cursor (consumer only).
+static IN_R: AtomicUsize = AtomicUsize::new(0);
+
 // ── Output buffer ──────────────────────────────────────────
 
 /// 32 KB linear buffer — enough for very long demo output.
@@ -240,6 +253,8 @@ fn abort_longjmp_if_requested() {
 pub fn reset() {
     W_POS.store(0, Ordering::Release);
     R_POS.store(0, Ordering::Release);
+    IN_W.store(0, Ordering::Release);
+    IN_R.store(0, Ordering::Release);
     ABORT.store(false, Ordering::Release);
 }
 
@@ -300,6 +315,32 @@ pub fn advance(n: usize) {
     }
 }
 
+// ── Input buffer public API ────────────────────────────────
+
+/// Producer: push bytes from the host shell into the input ring.
+/// Called from shell `send` command (USB ISR context, priority 2).
+/// Returns number of bytes actually written (may be < data.len if full).
+pub fn push_input(data: &[u8]) -> usize {
+    let mut written = 0;
+    for &b in data {
+        let w = IN_W.load(Ordering::Relaxed);
+        let r = IN_R.load(Ordering::Acquire);
+        let next_w = (w + 1) % IN_SIZE;
+        if next_w == r {
+            break; // ring full
+        }
+        unsafe { IN_BUF[w] = b; }
+        IN_W.store(next_w, Ordering::Release);
+        written += 1;
+    }
+    written
+}
+
+/// Check if input data is available (for EVT_INPUT detection).
+pub fn input_available() -> bool {
+    IN_W.load(Ordering::Acquire) != IN_R.load(Ordering::Acquire)
+}
+
 // ── MonitorApi construction ────────────────────────────────
 
 /// Build a [`MonitorApi`] whose `write_fn` routes to this module's
@@ -334,6 +375,8 @@ pub fn build_api() -> MonitorApi {
         imu_init: demo_imu_init,
         imu_read: demo_imu_read,
         set_hub_led: demo_set_hub_led,
+        wait_event: demo_wait_event,
+        read_input: demo_read_input,
     }
 }
 
@@ -395,7 +438,7 @@ extern "C" fn demo_update_leds() {
 }
 
 extern "C" fn demo_read_adc(ch: u32) -> u32 {
-    if ch <= 15 { crate::read_adc(ch) } else { 0 }
+    if ch <= 18 { crate::read_adc(ch) } else { 0 }
 }
 
 extern "C" fn demo_read_buttons() -> u8 {
@@ -492,6 +535,108 @@ extern "C" fn demo_set_hub_led(r: u32, g: u32, b: u32) {
     let b16 = ((b.min(100) as u32) * 0xFFFF / 100) as u16;
     led_matrix::set_status_rgb(crate::pins::BATTERY_LED, r16, g16, b16);
     unsafe { led_matrix::update(); }
+}
+
+/// Block until an event in `mask` fires, or `timeout_ms` expires.
+///
+/// Returns a bitmask of fired events (EVT_SENSOR, EVT_BUTTON, EVT_MOTOR)
+/// or EVT_TIMEOUT if the deadline expired first.  Maintains sensor
+/// keepalive, respects pause/abort, and never busy-waits — the 10ms
+/// chunks are real MCU sleep via `power::delay_ms`.
+///
+/// Used by both the direct callback (`go!` privileged mode) and the
+/// SVC #22 handler (`go` sandboxed mode).
+pub extern "C" fn demo_wait_event(mask: u32, timeout_ms: u32) -> u32 {
+    // Abort check
+    abort_longjmp_if_requested();
+    if ABORT.load(Ordering::Acquire) {
+        return spike_hub_api::EVT_TIMEOUT;
+    }
+
+    // Snapshot current state — events fire on *change*
+    let snap_buttons = crate::read_buttons();
+    let snap_sensor_seq = sensor::port_state(sensor::demo_active_port()).data_seq;
+    let snap_motor_pos = sensor::demo_motor_position();
+
+    let mut remaining = timeout_ms.min(30_000);
+    loop {
+        // ── Firmware-enforced pause (same pattern as delay_ms) ──
+        while crate::is_paused() && !ABORT.load(Ordering::Acquire) {
+            crate::power::delay_ms(20);
+            sensor::demo_maintain();
+            crate::watchdog::feed();
+        }
+        if ABORT.load(Ordering::Acquire) {
+            return spike_hub_api::EVT_TIMEOUT;
+        }
+
+        let mut fired = 0u32;
+
+        // Check sensor data freshness (sequence number changed?)
+        if mask & spike_hub_api::EVT_SENSOR != 0 {
+            let cur = sensor::port_state(sensor::demo_active_port()).data_seq;
+            if cur != snap_sensor_seq {
+                fired |= spike_hub_api::EVT_SENSOR;
+            }
+        }
+
+        // Check button state change
+        if mask & spike_hub_api::EVT_BUTTON != 0 {
+            let cur = crate::read_buttons();
+            if cur != snap_buttons {
+                fired |= spike_hub_api::EVT_BUTTON;
+            }
+        }
+
+        // Check motor position change
+        if mask & spike_hub_api::EVT_MOTOR != 0 {
+            let cur = sensor::demo_motor_position();
+            if cur != snap_motor_pos {
+                fired |= spike_hub_api::EVT_MOTOR;
+            }
+        }
+
+        // Check input buffer has data
+        if mask & spike_hub_api::EVT_INPUT != 0 {
+            if input_available() {
+                fired |= spike_hub_api::EVT_INPUT;
+            }
+        }
+
+        if fired != 0 {
+            return fired;
+        }
+
+        if remaining == 0 {
+            return spike_hub_api::EVT_TIMEOUT;
+        }
+
+        // Sleep 10ms, maintain keepalive — NOT busy-wait
+        let chunk = remaining.min(10);
+        crate::power::delay_ms(chunk);
+        remaining -= chunk;
+        sensor::demo_maintain();
+        crate::watchdog::feed();
+    }
+}
+
+/// Consumer: read bytes from the input ring into caller's buffer.
+/// Called from demo context (priority 1).  Returns bytes read.
+pub extern "C" fn demo_read_input(buf: *mut u8, len: u32) -> u32 {
+    abort_longjmp_if_requested();
+    if buf.is_null() || len == 0 { return 0; }
+    let mut n = 0u32;
+    while n < len {
+        let r = IN_R.load(Ordering::Relaxed);
+        let w = IN_W.load(Ordering::Acquire);
+        if r == w { break; } // empty
+        unsafe {
+            *buf.add(n as usize) = IN_BUF[r];
+        }
+        IN_R.store((r + 1) % IN_SIZE, Ordering::Release);
+        n += 1;
+    }
+    n
 }
 
 /// Blocking ramp+nudge controller for motor positioning.

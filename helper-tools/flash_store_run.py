@@ -30,10 +30,19 @@ Examples:
     python3 flash_store_run.py examples/hub-ram-demos/target/spike-usr_bins/color_seek.bin 0x10000
 """
 
-import serial, time, sys
+import serial, serial.tools.list_ports, time, sys, os
 
-PORT = "/dev/ttyACM0"
-BAUD = 115200
+# ── Project root: $PROJECT_ROOT or derived from this script's location ──
+PROJECT_ROOT = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import find_shell_port, open_serial, BAUD
+
+PORT = find_shell_port() or "/dev/ttyACM0"
 
 def cobs_encode(data: bytes) -> bytes:
     out = bytearray()
@@ -73,7 +82,7 @@ def main():
     print(f"Binary: {binfile} ({size} bytes)")
     print(f"Flash addr: 0x{flash_addr:08X}")
 
-    s = serial.Serial(PORT, BAUD, timeout=2)
+    s = open_serial(PORT, BAUD, timeout=2)
     time.sleep(0.5)
     s.reset_input_buffer()
 

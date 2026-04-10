@@ -170,11 +170,85 @@ pub fn set_status_rgb(led: (u8, u8, u8), r: u16, g: u16, b: u16) {
     set_channel_raw(led.2 as usize, b);
 }
 
+/// Verify TIM12 (GSCLK) and SPI1 are still running; re-enable if not.
+///
+/// Returns `true` if repair was needed.
+///
+/// # Safety
+/// Reads/writes peripheral registers.
+pub unsafe fn check_health() -> bool {
+    let mut repaired = false;
+
+    // Check TIM12 CEN (bit 0)
+    if reg_read(TIM12, TIM_CR1) & 1 == 0 {
+        // GSCLK stopped — full TIM12 re-init
+        reg_modify(RCC, RCC_APB1ENR, 0, 1 << 6); // ensure clock
+        reg_write(TIM12, TIM_PSC, 0);
+        reg_write(TIM12, TIM_ARR, 9);
+        reg_write(TIM12, TIM_CCR2, 4);
+        reg_write(TIM12, TIM_CCMR1, (6 << 12) | (1 << 11));
+        reg_write(TIM12, TIM_CCER, 1 << 4);
+        reg_write(TIM12, TIM_EGR, 1);
+        reg_write(TIM12, TIM_CR1, 1);
+        repaired = true;
+    }
+
+    // Check SPI1 SPE (bit 6) and MSTR (bit 2)
+    let cr1 = reg_read(SPI1, SPI_CR1);
+    if cr1 & (1 << 6) == 0 || cr1 & (1 << 2) == 0 {
+        // SPI1 lost enable or master mode — re-init
+        reg_modify(RCC, RCC_APB2ENR, 0, 1 << 12); // ensure clock
+        reg_write(
+            SPI1,
+            SPI_CR1,
+            (1 << 2)  // MSTR
+            | (1 << 3)  // BR
+            | (1 << 6)  // SPE
+            | (1 << 8)  // SSI
+            | (1 << 9), // SSM
+        );
+        repaired = true;
+    }
+
+    // Check PB15 is still AF mode (MODER bits 31:30 == 0b10)
+    if reg_read(pins::GPIOB, pins::MODER) >> 30 & 3 != 2 {
+        reg_modify(pins::GPIOB, pins::MODER, 3 << 30, 2 << 30);
+        reg_modify(pins::GPIOB, pins::AFRH, 0xF << 28, 9 << 28);
+        repaired = true;
+    }
+
+    if repaired {
+        // Re-send control latch so TLC5955 is in correct mode
+        spi_send(&CONTROL_LATCH);
+        latch();
+        spi_send(&CONTROL_LATCH);
+        latch();
+    }
+
+    repaired
+}
+
+/// Diagnostic snapshot: returns (tim12_cr1, spi1_cr1, spi1_sr, pb15_moder_bits).
+pub fn diag() -> (u32, u32, u32, u32) {
+    unsafe {
+        let tim12_cr1 = reg_read(TIM12, TIM_CR1);
+        let spi1_cr1 = reg_read(SPI1, SPI_CR1);
+        let spi1_sr = reg_read(SPI1, SPI_SR);
+        let pb15_moder = (reg_read(pins::GPIOB, pins::MODER) >> 30) & 3;
+        (tim12_cr1, spi1_cr1, spi1_sr, pb15_moder)
+    }
+}
+
 /// Flush the grayscale buffer to the TLC5955.
+///
+/// Includes a health check: if TIM12 or SPI1 got knocked out
+/// (e.g. by a user demo or peripheral fault), re-enables them
+/// before sending data.
 ///
 /// # Safety
 /// Accesses SPI1 registers and the global GS_BUF.
 pub unsafe fn update() {
+    check_health();
     spi_send(core::slice::from_raw_parts(
         core::ptr::addr_of!(GS_BUF) as *const u8,
         FRAME_SIZE,
@@ -195,6 +269,107 @@ pub unsafe fn clear() {
 pub fn show_pattern(pattern: &[u8; 25], brightness: u16) {
     for (i, &val) in pattern.iter().enumerate() {
         set_pixel(i, if val != 0 { brightness } else { 0 });
+    }
+}
+
+// ── Morse code battery-LED status indicator ──
+//
+// Two-letter Morse codes blinked on the battery LED:
+//   CH = Charging    (C: -.-. H: ....)
+//   HI = Complete    (H: .... I: ..)
+//   NG = Fault       (N: -.   G: --.)
+//   BT = Battery     (B: -... T: -)
+//
+// Timing: each element = 1 base unit (250 ms nominal).
+// dit = 1 unit ON, dah = 3 units ON.
+// Farnsworth spacing: element timing at ~10 WPM (1 unit = 125 ms),
+// but letter gaps stretched to 7 units (875 ms) and repeat pause
+// to 24 units (3 s) for clear character separation.
+//
+// Dit = 1 unit ON, Dah = 3 units ON, element gap = 1 unit OFF.
+// Letter gap = 7 units OFF (Farnsworth).  Repeat pause = 24 units OFF.
+
+/// CH — Charging: C(-.-.) H(....)
+const MORSE_CH: &[u8] = &[
+    1,1,1, 0, 1, 0, 1,1,1, 0, 1,           // C
+    0,0,0,0,0,0,0,                          // letter gap (Farnsworth)
+    1, 0, 1, 0, 1, 0, 1,                    // H
+    0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,  // 3 s pause
+];
+
+/// HI — Complete: H(....) I(..)
+const MORSE_HI: &[u8] = &[
+    1, 0, 1, 0, 1, 0, 1,                    // H
+    0,0,0,0,0,0,0,                          // letter gap (Farnsworth)
+    1, 0, 1,                                // I
+    0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
+];
+
+/// NG — Fault: N(-.) G(--.)
+const MORSE_NG: &[u8] = &[
+    1,1,1, 0, 1,                             // N
+    0,0,0,0,0,0,0,                          // letter gap (Farnsworth)
+    1,1,1, 0, 1,1,1, 0, 1,                  // G
+    0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
+];
+
+/// BT — Battery/Discharging: B(-...) T(-)
+const MORSE_BT: &[u8] = &[
+    1,1,1, 0, 1, 0, 1, 0, 1,                // B
+    0,0,0,0,0,0,0,                          // letter gap (Farnsworth)
+    1,1,1,                                  // T
+    0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,
+];
+
+/// Morse status indices (match ChargerStatus variants).
+pub const MORSE_CHARGING: u8 = 0;
+pub const MORSE_COMPLETE: u8 = 1;
+pub const MORSE_FAULT:    u8 = 2;
+pub const MORSE_BATTERY:  u8 = 3;
+
+/// Morse-code blinker state for the battery LED.
+///
+/// Call `set_status()` each heartbeat to track charger state,
+/// then `is_mark()` + `advance()` once per 125 ms unit (Farnsworth).
+pub struct MorseBlinker {
+    pos: u8,
+    status: u8,
+}
+
+impl MorseBlinker {
+    pub const fn new() -> Self {
+        Self { pos: 0, status: 0 }
+    }
+
+    fn pattern(&self) -> &'static [u8] {
+        match self.status {
+            MORSE_CHARGING => MORSE_CH,
+            MORSE_COMPLETE => MORSE_HI,
+            MORSE_FAULT    => MORSE_NG,
+            _              => MORSE_BT,
+        }
+    }
+
+    /// Update status. Resets to pattern start when it changes.
+    pub fn set_status(&mut self, s: u8) {
+        if s != self.status {
+            self.status = s;
+            self.pos = 0;
+        }
+    }
+
+    /// `true` if the current position is a Morse mark (bright flash).
+    pub fn is_mark(&self) -> bool {
+        let p = self.pattern();
+        (self.pos as usize) < p.len() && p[self.pos as usize] != 0
+    }
+
+    /// Advance to the next position (wraps at end of pattern).
+    pub fn advance(&mut self) {
+        self.pos += 1;
+        if self.pos as usize >= self.pattern().len() {
+            self.pos = 0;
+        }
     }
 }
 

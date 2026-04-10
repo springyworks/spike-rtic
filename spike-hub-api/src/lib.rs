@@ -59,7 +59,7 @@
 // ── Version ────────────────────────────────────────────────────
 
 /// Current API version.  Bumped when the struct layout changes.
-pub const API_VERSION: u32 = 10;
+pub const API_VERSION: u32 = 12;
 
 // ── Button flags ───────────────────────────────────────────────
 
@@ -69,6 +69,22 @@ pub const BTN_CENTER: u8 = 0x01;
 pub const BTN_LEFT: u8 = 0x02;
 /// Right button pressed.
 pub const BTN_RIGHT: u8 = 0x04;
+
+// ── Upload buffer ──────────────────────────────────────────────
+
+// ── Event flags for wait_event() ────────────────────────────────
+
+/// New sensor data available on the active LUMP port.
+pub const EVT_SENSOR: u32 = 1 << 0;
+/// Button state changed (any of center/left/right).
+pub const EVT_BUTTON: u32 = 1 << 1;
+/// Motor position changed (any port with active poll).
+pub const EVT_MOTOR: u32 = 1 << 2;
+/// Timeout expired (no other event fired within the deadline).
+pub const EVT_TIMEOUT: u32 = 1 << 3;
+
+/// Input data available from `send` shell command.
+pub const EVT_INPUT: u32 = 1 << 4;
 
 // ── Upload buffer ──────────────────────────────────────────────
 
@@ -118,8 +134,10 @@ pub const UPLOAD_BUF_SIZE: usize = 64 * 1024;
 /// | 0x54   | `imu_init`     | `fn() -> u32`                        |
 /// | 0x58   | `imu_read`     | `fn(buf, len) -> u32`                |
 /// | 0x5C   | `set_hub_led`  | `fn(r, g, b)`                        |
+/// | 0x60   | `wait_event`   | `fn(mask, timeout_ms) -> u32`        |
+/// | 0x64   | `read_input`   | `fn(buf, len) -> u32`                |
 ///
-/// Size: 96 bytes on 32-bit ARM.
+/// Size: 104 bytes on 32-bit ARM.
 #[repr(C)]
 pub struct MonitorApi {
     /// API version — check this before using any fields.
@@ -317,10 +335,55 @@ pub struct MonitorApi {
     /// - `g`: green brightness 0-100
     /// - `b`: blue brightness 0-100
     pub set_hub_led: extern "C" fn(r: u32, g: u32, b: u32),
+
+    /// Block until an event in `mask` fires, or `timeout_ms` expires.
+    ///
+    /// Returns a bitmask of which events fired ([`EVT_SENSOR`],
+    /// [`EVT_BUTTON`], [`EVT_MOTOR`]).  Returns [`EVT_TIMEOUT`] if no
+    /// event fired before the deadline.  Maintains sensor keepalive and
+    /// respects abort/pause internally — the caller never polls.
+    ///
+    /// - `mask`: OR of `EVT_*` constants — which events to listen for
+    /// - `timeout_ms`: maximum wait time (0 = check once, no wait)
+    ///
+    /// # Example (demo side)
+    /// ```rust,ignore
+    /// loop {
+    ///     let evt = (api.wait_event)(EVT_SENSOR | EVT_BUTTON, 500);
+    ///     if evt & EVT_BUTTON != 0 {
+    ///         if (api.read_buttons)() & BTN_CENTER != 0 { break; }
+    ///     }
+    ///     if evt & EVT_SENSOR != 0 {
+    ///         let n = (api.sensor_read)(buf.as_mut_ptr(), 32);
+    ///         // process sensor data — it's guaranteed fresh
+    ///     }
+    ///     if evt & EVT_TIMEOUT != 0 {
+    ///         // heartbeat / periodic work
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// Added in API v11.
+    pub wait_event: extern "C" fn(mask: u32, timeout_ms: u32) -> u32,
+
+    /// Read pending input bytes from the host shell `send` command.
+    ///
+    /// Copies up to `len` bytes from the 128-byte input ring buffer
+    /// into `buf`.  Returns number of bytes actually read (0 if empty).
+    /// Non-blocking — returns immediately.
+    ///
+    /// Use `wait_event(EVT_INPUT, timeout)` to sleep until input arrives.
+    ///
+    /// - `buf`: pointer to caller's buffer
+    /// - `len`: size of caller's buffer
+    /// - Returns: number of bytes read
+    ///
+    /// Added in API v12.
+    pub read_input: extern "C" fn(buf: *mut u8, len: u32) -> u32,
 }
 
-// Compile-time layout check: 24 fields × 4 bytes = 96 bytes on 32-bit ARM.
-const _: () = assert!(core::mem::size_of::<MonitorApi>() == 96);
+// Compile-time layout check: 26 fields × 4 bytes = 104 bytes on 32-bit ARM.
+const _: () = assert!(core::mem::size_of::<MonitorApi>() == 104);
 
 impl MonitorApi {
     /// Convenience: write a byte slice to CDC serial output.

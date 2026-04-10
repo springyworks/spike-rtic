@@ -1,0 +1,6 @@
+💥 💥 💥  example codes to be run on spike-hub
+when u did spike>gdb  
+type : $D#44  [return]
+
+$D#44 is the magic string for the hub-gdb-stub ,
+ it gets the firmware of the hub out of gdb debug-mode and back into the spike> shell

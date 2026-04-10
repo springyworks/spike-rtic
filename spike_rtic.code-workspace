@@ -76,18 +76,44 @@
 				"group": "SPIKE Hub"
 			},
 			{
-				"command": "cd $PROJECT_ROOT && python3 helper-tools/spike_hub_controller.py diag",
+				"command": "cd $PROJECT_ROOT && python3 helper-tools/hub.py state",
 				"auto": true,
-				"name": "Hub diagnostics (full)",
-				"group": "SPIKE Hub"
-			},
-			{
-				"command": "cd $PROJECT_ROOT && python3 helper-tools/spike_hub_controller.py",
-				"auto": true,
-				"preserve": true,
-				"name": "Hub controller TUI",
+				"name": "Hub diagnostics",
 				"group": "SPIKE Hub"
 			}
-		]
+		],
+		"command-runner.terminal.autoClear": false,
+		"command-runner.terminal.cwd": "$PROJECT_ROOT",
+		"command-runner.commands": {
+			"🔌 Hub Connect (status + shell)": "cargo xtask connect",
+			"📊 Hub Status": "cargo xtask status",
+			"⚡ Flash Firmware": "cargo xtask flash",
+			"🔨 Build Firmware": "cargo build --release",
+			"🔨 Build All Demos": "cargo xtask build-demos",
+			"🔍 Port Status": "cargo demo port",
+			"🔓 Free Port": "cargo demo free-port",
+			"📋 List Demos": "cargo demo list",
+			"🚀 Upload Demo (pick)": "cargo demo",
+			"🐛 Debug Demo (pick)": "cargo demo"
+		},
+		"VsCode_Action_Buttons.showReloadButton": false,
+		"actionButtons": {
+			"defaultColor": "#00ff88",
+			"reloadButton": null,
+			"commands": [
+				{
+					"name": "🔌 Hub",
+					"color": "#00ff88",
+					"singleInstance": true,
+					"command": "cargo xtask connect"
+				}
+			]
+		},
+		"shortcut-menu-bar.userButton01": {
+			"label": "🔌 Hub",
+			"tooltip": "Hub Connect — status + serial shell",
+			"command": "workbench.action.tasks.runTask",
+			"arguments": ["hub-connect"]
+		}
 	}
 }

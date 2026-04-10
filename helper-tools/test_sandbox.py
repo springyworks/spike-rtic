@@ -29,11 +29,22 @@ MonitorApi layout (32-bit ARM, all fields 4 bytes):
 
 import struct
 import serial
+import serial.tools.list_ports
 import time
 import sys
+import os
 
-PORT = "/dev/ttyACM0"
-BAUD = 115200  # irrelevant for CDC but required by pyserial
+# ── Project root: $PROJECT_ROOT or derived from this script's location ──
+PROJECT_ROOT = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import find_shell_port, open_serial, BAUD
+
+PORT = find_shell_port() or "/dev/ttyACM0"
 SRAM2_BASE = 0x20040000
 
 # ── COBS encode ──────────────────────────────────────────────
@@ -278,9 +289,9 @@ def build_periph_fault_demo():
 
 # ── Serial communications ───────────────────────────────────
 
-def open_serial():
+def open_serial_conn():
     """Open serial connection to hub."""
-    s = serial.Serial(PORT, BAUD, timeout=2)
+    s = open_serial(PORT, BAUD, timeout=2)
     time.sleep(0.3)
     s.reset_input_buffer()
     return s
@@ -467,7 +478,7 @@ def main():
     print(f"Port: {PORT}")
     print()
 
-    s = open_serial()
+    s = open_serial_conn()
 
     # Quick connectivity check
     resp = send_cmd(s, "uptime")

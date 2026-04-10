@@ -41,6 +41,7 @@
 //! | 9    | sensor_mode    | r0=mode                      |
 //! | 10   | sound_play     | r0=freq_hz                   |
 //! | 11   | sound_stop     | (none)                        |
+//! | 22   | wait_event     | r0=mask, r1=timeout_ms; ret  |
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -665,7 +666,7 @@ pub unsafe extern "C" fn SVCall_handler() {
         }
         // SVC #4: read_adc(channel) -> value
         4 => {
-            if r0 <= 15 { crate::read_adc(r0) } else { 0 }
+            if r0 <= 18 { crate::read_adc(r0) } else { 0 }
         }
         // SVC #5: read_buttons() -> flags
         5 => {
@@ -798,6 +799,14 @@ pub unsafe extern "C" fn SVCall_handler() {
             crate::led_matrix::set_status_rgb(crate::pins::BATTERY_LED, r16, g16, b16);
             crate::led_matrix::update();
             0
+        }
+        // SVC #22: wait_event(mask, timeout_ms) -> fired_events
+        22 => {
+            user_app_io::demo_wait_event(r0, r1)
+        }
+        // SVC #23: read_input(buf, len) -> bytes_read
+        23 => {
+            user_app_io::demo_read_input(r0 as *mut u8, r1)
         }
         // SVC #100: restore privileged mode (demo returning)
         100 => {
@@ -1032,6 +1041,8 @@ pub fn build_sandboxed_api() -> spike_hub_api::MonitorApi {
         imu_init: svc_imu_init,
         imu_read: svc_imu_read,
         set_hub_led: svc_set_hub_led,
+        wait_event: svc_wait_event,
+        read_input: svc_read_input,
     }
 }
 
@@ -1343,4 +1354,32 @@ extern "C" fn svc_set_hub_led(r: u32, g: u32, b: u32) {
             lateout("r3") _,
         );
     }
+}
+
+extern "C" fn svc_wait_event(mask: u32, timeout_ms: u32) -> u32 {
+    let result: u32;
+    unsafe {
+        core::arch::asm!(
+            "svc #22",
+            inlateout("r0") mask => result,
+            in("r1") timeout_ms,
+            lateout("r2") _,
+            lateout("r3") _,
+        );
+    }
+    result
+}
+
+extern "C" fn svc_read_input(buf: *mut u8, len: u32) -> u32 {
+    let result: u32;
+    unsafe {
+        core::arch::asm!(
+            "svc #23",
+            inlateout("r0") buf => result,
+            inlateout("r1") len => _,
+            lateout("r2") _,
+            lateout("r3") _,
+        );
+    }
+    result
 }

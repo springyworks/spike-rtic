@@ -19,17 +19,15 @@ import serial.tools.list_ports
 import sys
 import time
 
-LEGO_VID    = 0x0694
-RUNTIME_PID = 0x0042
-BAUD = 115200
+# ── Project root: $PROJECT_ROOT or derived from this script's location ──
+PROJECT_ROOT = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 
-
-def find_hub_port():
-    """Auto-detect LEGO SPIKE hub serial port by VID:PID."""
-    for p in serial.tools.list_ports.comports():
-        if (p.vid or 0) == LEGO_VID and (p.pid or 0) == RUNTIME_PID:
-            return p.device
-    return None
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import find_shell_port as find_hub_port, open_serial, BAUD
 
 
 def cobs_encode(data: bytes) -> bytes:
@@ -102,7 +100,7 @@ def main():
     # ── 1. Test serial connection ──
     print(f"Connecting to {port} ...")
     try:
-        s = serial.Serial(port, BAUD, timeout=2)
+        s = open_serial(port, BAUD, timeout=2)
     except serial.SerialException as e:
         fail(f"Cannot open {port}: {e}")
 

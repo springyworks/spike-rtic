@@ -1,5 +1,9 @@
 # SPIKE-rtic  Hub — User Manual
 
+[← Main README](README.md) · [Reference Manual](REFERENCE_MANUAL.md) · [API Reference](spike-hub-api/README.md) · [RAM Demos](examples/hub-ram-demos/README.md) · [Helper Tools](helper-tools/README.md) · [Dev Notes](dev_notes/)
+
+---
+
 Bare-metal Rust firmware for the **LEGO SPIKE Prime Hub** using **RTIC v2**.An interactive **Demon-style debug monitor** over USB CDC serial — controlmotors, read sensors, dump memory, upload binaries, and access 32 MB ofexternal SPI flash — all without a hardware debugger.
 
 > **Status:** proof-of-concept, improving steadily.  
@@ -25,6 +29,7 @@ Bare-metal Rust firmware for the **LEGO SPIKE Prime Hub** using **RTIC v2**.An i
     - [2.6 External Flash (SPI2)](#26-external-flash-spi2)
     - [2.7 DWT Watchpoints](#27-dwt-watchpoints)
     - [2.8 GDB Remote Debug](#28-gdb-remote-debug)
+      - [VS Code + codeLLDB Extension](#vs-code--codelldb-extension)
     - [2.9 System \& Misc](#29-system--misc)
   - [3 Process Management](#3-process-management)
     - [3.1 Three Ways to Kill a Running Demo](#31-three-ways-to-kill-a-running-demo)
@@ -54,7 +59,8 @@ Bare-metal Rust firmware for the **LEGO SPIKE Prime Hub** using **RTIC v2**.An i
 ### 1.1 Build & Flash
 
 ```
-# Build firmware (from project root)
+# Build firmware
+cd $PROJECT_ROOT
 cargo build --release
 
 # Convert to raw binary (ALWAYS output to target/spike-rtic.bin — nowhere else!)
@@ -63,10 +69,10 @@ arm-none-eabi-objcopy -O binary \
     target/spike-rtic.bin
 
 # Enter DFU mode (see §5.1) then flash:
-dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D target/spike-rtic.bin
+dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D $PROJECT_ROOT/target/spike-rtic.bin
 ```
 
-Or use the script: `./helper-tools/flash.sh`
+Or use the script: `$PROJECT_ROOT/helper-tools/flash.sh`
 
 > **⚠ STALE BIN DANGER:** Never `objcopy` to `firmware.bin`, `lego-spike-prime.bin`,  
 > or any path outside `target/`. Stale bins cause phantom faults and silent  
@@ -80,7 +86,7 @@ picocom /dev/ttyACM0
 # or
 screen /dev/ttyACM0 115200
 # or
-python3 helper-tools/spike_hub_controller.py shell  # interactive shell with upload support
+python3 $PROJECT_ROOT/helper-tools/hub.py cmd  # interactive shell session
 ```
 
 Type `help` at the `spike>` prompt for a full command list.
@@ -133,8 +139,8 @@ arm-none-eabi-objcopy -O binary \
 
 # Upload and execute
 python3 $PROJECT_ROOT/helper-tools/upload_demo.py ./target/spike-usr_bins/dual_motors.bin
-# Or with the controller:
-python3 $PROJECT_ROOT/helper-tools/spike_hub_controller.py upload ./target/spike-usr_bins/dual_motors.bin
+# Or with hub.py:
+python3 $PROJECT_ROOT/helper-tools/hub.py run ./target/spike-usr_bins/dual_motors.bin
 ```
 
 For full details see the [hub-ram-demos README](examples/hub-ram-demos/README.md)  
@@ -167,6 +173,22 @@ serial — whatever you have. All output uses `\r\n` (CRLF).
 | `beep [f] [ms]`  | Play tone (default 1000 Hz 200 ms, non-blocking)                 |
 | `load`           | Battery + system load overview                                   |
 
+#### Battery LED — Morse Status Indicator
+
+The battery LED continuously blinks a two-letter Morse code showing
+charger state (Farnsworth timing: 125 ms/element, 875 ms letter gap,
+3 s repeat pause):
+
+| Morse | Letters | Meaning | LED Colour |
+|:------|:--------|:--------|:-----------|
+| `-.-. ....` | **CH** | Charging (USB present, current flowing) | Green |
+| `.... ..` | **HI** | Charge complete (battery ≥ 8.3 V) | Green |
+| `-. --.` | **NG** | Fault (NTC error or safety timer) | Amber |
+| `-... -` | **BT** | Battery (no USB, discharging) | Off |
+
+The **status LED** (near the USB port) pulses dim cyan every 5 s as a
+heartbeat. Blue flashes on that LED indicate USB serial data traffic.
+
 
 ### 2.2 Upload & Execute
 
@@ -177,7 +199,8 @@ serial — whatever you have. All output uses `\r\n` (CRLF).
 | `bininfo`       | Info on last uploaded binary (size, CRC, address)        |
 | `go [addr]`     | Execute RAM demo sandboxed (MPU + SVC, unprivileged)     |
 | `go! [addr]`    | Execute RAM demo privileged (direct fn pointers, no MPU) |
-| `kill [-2       | -9                                                       |
+| `kill [-2\|-9\|-15]` | Kill running demo (SIGINT / SIGKILL / SIGTERM)    |
+| `send <text>`   | Send text to running demo (read via `read_input` API)    |
 | `raminfo`       | SRAM map & usage stats                                   |
 | `ramtest [arg]` | RAM test:`safe` `sram2` `addr` `all`                     |
 
@@ -332,19 +355,20 @@ demo binary, sends `go` to start it, sends `gdb` to enter RSP mode, and
 releases the serial port for GDB.
 
 ```bash
-# 1. Build the demo (from examples/hub-ram-demos/)
+# 1. Build the demo
+cd $PROJECT_ROOT/examples/hub-ram-demos
 cargo build --example gdb_exercise --release
 arm-none-eabi-objcopy -O binary \
     target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
     target/spike-usr_bins/gdb_exercise.bin
 
 # 2. Upload + enter RSP mode (auto-detects port)
-python3 helper-tools/debug_pipeline.py \
-    examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin
+python3 $PROJECT_ROOT/helper-tools/debug_pipeline.py \
+    $PROJECT_ROOT/examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin
 
 # 3. Connect GDB (pipeline released the port)
 gdb-multiarch \
-    examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
+    $PROJECT_ROOT/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
     -ex "set architecture arm" \
     -ex "target remote /dev/ttyACM0"
 ```
@@ -353,24 +377,55 @@ gdb-multiarch \
 that automate the full build → objcopy → pipeline → GDB attach cycle.
 Press F5 to build, upload, and start debugging.
 
+#### VS Code + codeLLDB Extension
+
+The **codeLLDB** extension for VS Code provides an alternative to
+`gdb-multiarch` with a richer GUI: variable watch, memory view,
+disassembly, and conditional breakpoints — all inside VS Code.
+
+**Requirements:**
+- Install the [codeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) extension
+- `arm-none-eabi-objcopy` (from `gcc-arm-none-eabi` or `binutils-arm-none-eabi`)
+- `python3` with `pyserial` (`pip install pyserial`)
+
+**How it works:**
+The workspace includes `launch.json` configurations that run the xtask
+build pipeline as a `preLaunchTask`.  The xtask (`examples/hub-ram-demos/xtask/`)
+builds the demo, runs `objcopy`, uploads via COBS, sends `go` + `gdb`,
+and releases the serial port — all in one step.  CodeLLDB then attaches
+over RSP on the same serial port.
+
+**Usage:**
+1. Open a demo source file (e.g., `examples/hub-ram-demos/examples/gdb_exercise.rs`)
+2. Press **F5** (or use the task picker: `xtask-debug-open-file`)
+3. The xtask builds → uploads → enters RSP mode → codeLLDB attaches
+4. Set breakpoints, step, inspect variables — standard VS Code workflow
+5. **Detach** (Shift+F5) to return the hub to shell mode
+
+The RSP stub supports `vCont`, `QStartNoAckMode`, and sequential register
+reads — features needed by LLDB but not always by GDB.
+
+See also: [gdb-vs-codelldb.md](dev_notes/gdb-vs-codelldb.md) for
+protocol differences and implementation notes.
+
 **Manual workflow (without pipeline):**
 
 ```bash
 # 1. Upload demo
-python3 helper-tools/upload_demo.py \
-  examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin
+python3 $PROJECT_ROOT/helper-tools/upload_demo.py \
+  $PROJECT_ROOT/examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin
 
 # 2. In picocom: type 'go' then 'gdb', then close picocom
 
 # 3. Connect GDB:
 gdb-multiarch \
-  examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
+  $PROJECT_ROOT/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
   -ex "set architecture arm" \
   -ex "target remote /dev/ttyACM0"
 
 # 4. If serial drops, reconnect (hub stays in RSP mode):
 gdb-multiarch \
-  examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
+  $PROJECT_ROOT/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
   -ex "set architecture arm" \
   -ex "target remote /dev/ttyACM0"
 ```
@@ -405,7 +460,7 @@ classify the hub before acting:
 
 ```bash
 # Just detect state (exit code = state number):
-python3 helper-tools/hub_state.py
+python3 $PROJECT_ROOT/helper-tools/hub_state.py
 ```
 
 **Example with pyserial:**
@@ -595,6 +650,9 @@ full build instructions and the complete demo template.
 | `motor-sensor-test` | `examples/motor_sensor_test.rs` | v7+ | Motor + sensor integration test                            |
 | `pwm-diag`          | `examples/pwm_diag.rs`          | v2+ | PWM diagnostics on motor ports                             |
 | `reg-dump`          | `examples/reg_dump.rs`          | v2+ | Hardware register inspection                               |
+| `event-driven`      | `examples/event_driven.rs`      | v12+ | Event-driven demo: IMU, thermal, buttons, host input (EVT_*) |
+| `gdb-exercise`      | `examples/gdb_exercise.rs`      | v2+ | Breakpoint/watchpoint exercise for GDB/codeLLDB debugging  |
+| `gdb-simple`        | `examples/gdb_simple.rs`        | v1+ | Minimal GDB target (blink + delay loop)                    |
 
 
 All demos are in `[examples/hub-ram-demos/](examples/hub-ram-demos/)`.
@@ -616,7 +674,7 @@ Verify with: `lsusb | grep 0694`
 ### 5.2 Flashing
 
 ```
-dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D target/spike-rtic.bin
+dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D $PROJECT_ROOT/target/spike-rtic.bin
 ```
 
 > **Important:** always use `-d 0694:0011` (LEGO VID:PID), not the  
@@ -646,11 +704,10 @@ All scripts live in `**helper-tools/**`. Run them from the project root:
 
 | Script                                 | Purpose                                                   |
 | -------------------------------------- | --------------------------------------------------------- |
-| `helper-tools/spike_hub_controller.py` | Unified controller: TUI, shell, flash, upload, test, diag |
-| `helper-tools/upload_demo.py`          | Lightweight demo upload + run (for automation)            |
+| `helper-tools/hub.py`                  | Swiss-army CLI: state, flash, cmd, upload, run, monitor   |
+| `helper-tools/upload_demo.py`          | Lightweight demo upload + run (used by xtask)             |
 | `helper-tools/hub_state.py`            | Detect hub state (disconnected/DFU/shell/GDB) + auto-GDB |
-| `helper-tools/enter_rsp.py`            | Send `gdb` command to hub, release port for GDB          |
-| `helper-tools/hub.py`                  | Hub state detect, flash, send commands (library)          |
+| `helper-tools/debug_pipeline.py`       | Pre-launch: upload → go → enter RSP → release port        |
 | `helper-tools/test_hub_mon.py`         | Automated 65-test suite covering all shell commands       |
 | `helper-tools/test_sandbox.py`         | MPU sandbox tests with hand-built ARM Thumb binaries      |
 | `helper-tools/color_ballet.py`         | Motor/sensor demo — search and elegantly alternate colors |
@@ -662,9 +719,11 @@ All scripts live in `**helper-tools/**`. Run them from the project root:
 Connect and upload in one step:
 
 ```
-python3 helper-tools/spike_hub_controller.py upload examples/hub-ram-demos/target/spike-usr_bins/dual_motors.bin
+python3 $PROJECT_ROOT/helper-tools/hub.py run \
+    $PROJECT_ROOT/examples/hub-ram-demos/target/spike-usr_bins/dual_motors.bin
 # Or for demo workflow (upload + probe sensor + go + stream output):
-python3 helper-tools/upload_demo.py examples/hub-ram-demos/target/spike-usr_bins/dual_motors.bin
+python3 $PROJECT_ROOT/helper-tools/upload_demo.py \
+    $PROJECT_ROOT/examples/hub-ram-demos/target/spike-usr_bins/dual_motors.bin
 ```
 
 ---
@@ -694,8 +753,8 @@ but only one runs the full LUMP sync + keepalive state machine.
 - **LUMP keepalive is fragile.** If anything blocks the keepalive  
 path for >250 ms, the sensor goes silent and needs a full re-sync  
 (500–1000 ms).
-- **No gyro / IMU driver.** The hub has an LSM6DS3TR-C (I2C) but  
-the driver is minimal. No orientation data yet.
+- **IMU driver is basic.** The LSM6DS3TR-C (I2C2 bit-bang) provides  
+raw accel + gyro data at 104 Hz. No sensor fusion or orientation yet.
 
 ### 7.3 Connectivity
 

@@ -1,5 +1,9 @@
 # SPIKE-rtic  Hub — Reference Manual
 
+[← Main README](README.md) · [User Manual](USER_MANUAL.md) · [API Reference](spike-hub-api/README.md) · [RAM Demos](examples/hub-ram-demos/README.md) · [Helper Tools](helper-tools/README.md) · [Dev Notes](dev_notes/)
+
+---
+
 Technical reference for the RTIC v2 firmware internals: hardware specifications,  
 memory layout, architecture, the MonitorApi callback table, and design decisions.
 
@@ -60,6 +64,8 @@ For getting started, shell commands, and how-to guides, see [USER\_MANUAL.md](US
 | DFU | LEGO bootloader (VID:PID 0x0694:0x0011) |
 | Buttons | Center/Left/Right via ADC resistor ladder |
 | Battery | LiPo with voltage, current, NTC via ADC |
+| Charger | MP2639A — ISET via TIM5 CH1 (PA0), MODE via TLC5955 ch14 |
+| Battery LED | Morse status: CH=charging, HI=complete, NG=fault, BT=battery |
 | Motors | 6× H-bridge PWM (TIM1/TIM2/TIM3/TIM12, ports A–F) |
 | Sensors | 6× LPF2 LUMP UART (2400 sync → 115200 data) |
 | Speaker | Piezo via TIM4 PWM + DAC1 triangle wave |
@@ -213,7 +219,7 @@ The firmware passes a `*const MonitorApi` to RAM demos. This
 `#[repr(C)]` struct is the demo's only interface to the hardware.  
 Defined in the shared [`spike-hub-api`](spike-hub-api/) crate.
 
-Current version: `**API_VERSION = 10**` (24 fields, 96 bytes on 32-bit ARM).
+Current version: `**API_VERSION = 12**` (26 fields, 104 bytes on 32-bit ARM).
 
 | # | Field | Signature | SVC | Since |
 | --- | --- | --- | --- | --- |
@@ -241,6 +247,12 @@ Current version: `**API_VERSION = 10**` (24 fields, 96 bytes on 32-bit ARM).
 | 21 | `imu_init` | `fn() → u32` | 19 | v10 |
 | 22 | `imu_read` | `fn(buf, len) → u32` | 20 | v10 |
 | 23 | `set_hub_led` | `fn(r, g, b)` | 21 | v10 |
+| 24 | `wait_event` | `fn(mask, timeout_ms) → u32` | 22 | v11 |
+| 25 | `read_input` | `fn(buf, len) → u32` | 23 | v12 |
+
+**Event flags** for `wait_event` mask:
+`EVT_SENSOR` (1<<0), `EVT_BUTTON` (1<<1), `EVT_MOTOR` (1<<2),
+`EVT_TIMEOUT` (1<<3), `EVT_INPUT` (1<<4).
 
 **Sandboxed** (`go`): demo runs unprivileged with MPU; API calls go  
 through SVC traps. **Privileged** (`go!`): direct function pointers,  
@@ -434,12 +446,12 @@ PacketSize=256;hwbreak-;swbreak-
 
 ```bash
 # Debug pipeline — upload, go, gdb, release port (recommended):
-python3 helper-tools/debug_pipeline.py \
-    examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin
+python3 $PROJECT_ROOT/helper-tools/debug_pipeline.py \
+    $PROJECT_ROOT/examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin
 
 # Then connect GDB:
 gdb-multiarch \
-    examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
+    $PROJECT_ROOT/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_exercise \
     -ex "set architecture arm" \
     -ex "target remote /dev/ttyACM0"
 ```
@@ -565,6 +577,9 @@ with no Rust destructors and no access to kernel resources.
 | Motor H-bridge PWM driver (all 6 ports) | Done |
 | MonitorApi callbacks for RAM demos (v5) | Done |
 | MonitorApi v10: IMU, port\_read, sensor\_light, hub\_led | Done |
+| MonitorApi v11: wait\_event — event-driven blocking (EVT\_*) | Done |
+| MonitorApi v12: read\_input, EVT\_INPUT — host→demo text channel | Done |
+| IMU I2C bus-reset recovery (9 SCL clocks + dual-address probe) | Done |
 | LPF2 LUMP sensor driver (async ISR, 115200 baud) | Done |
 | Color sensor sync + continuous data streaming | Done |
 | Per-port ring buffers (6 × 512 B SPSC) | Done |

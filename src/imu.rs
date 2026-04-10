@@ -24,6 +24,7 @@ const SCL_PIN: u32 = pins::IMU_SCL_PIN;   // 10
 
 // ── LSM6DS3TR-C registers ──
 const IMU_ADDR: u8 = 0x6A; // 7-bit I2C address (SDO/SA0 = GND)
+const IMU_ADDR_ALT: u8 = 0x6B; // alternate address (SDO/SA0 = VDD)
 const WHO_AM_I: u8 = 0x0F;
 const WHO_AM_I_VAL: u8 = 0x6A; // LSM6DS3TR-C
 const CTRL1_XL: u8 = 0x10; // Accel control
@@ -33,6 +34,9 @@ const OUTX_L_G: u8 = 0x22; // Gyro X low byte (6 bytes: G_X, G_Y, G_Z)
 const OUTX_L_XL: u8 = 0x28; // Accel X low byte (6 bytes: XL_X, XL_Y, XL_Z)
 
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Active I2C address (set during init after probing).
+static mut ACTIVE_ADDR: u8 = IMU_ADDR;
 
 // ── Bit-bang I2C helpers ──
 
@@ -67,6 +71,25 @@ unsafe fn gpio_init() {
     sda_high();
     scl_high();
     delay_i2c();
+    delay_i2c();
+
+    // I2C bus reset: 9 clock pulses with SDA released.
+    // If a slave is holding SDA low (stuck mid-byte from a previous
+    // interrupted transaction), clocking SCL lets it finish and release.
+    // Standard recovery procedure — Pybricks, Linux i2c-gpio, NXP AN10216.
+    sda_high(); // release SDA
+    for _ in 0..9 {
+        scl_low();
+        delay_i2c();
+        scl_high();
+        delay_i2c();
+    }
+    // Generate STOP to reset all slaves to idle state
+    sda_low();
+    delay_i2c();
+    scl_high();
+    delay_i2c();
+    sda_high();
     delay_i2c();
 }
 
@@ -179,7 +202,7 @@ unsafe fn i2c_read_byte(ack: bool) -> u8 {
 /// Write one register.
 unsafe fn write_reg(reg: u8, val: u8) -> bool {
     i2c_start();
-    if !i2c_write_byte((IMU_ADDR << 1) | 0) { i2c_stop(); return false; }
+    if !i2c_write_byte((ACTIVE_ADDR << 1) | 0) { i2c_stop(); return false; }
     if !i2c_write_byte(reg) { i2c_stop(); return false; }
     if !i2c_write_byte(val) { i2c_stop(); return false; }
     i2c_stop();
@@ -189,10 +212,10 @@ unsafe fn write_reg(reg: u8, val: u8) -> bool {
 /// Read one register.
 unsafe fn read_reg(reg: u8) -> Option<u8> {
     i2c_start();
-    if !i2c_write_byte((IMU_ADDR << 1) | 0) { i2c_stop(); return None; }
+    if !i2c_write_byte((ACTIVE_ADDR << 1) | 0) { i2c_stop(); return None; }
     if !i2c_write_byte(reg) { i2c_stop(); return None; }
     i2c_start(); // repeated start
-    if !i2c_write_byte((IMU_ADDR << 1) | 1) { i2c_stop(); return None; }
+    if !i2c_write_byte((ACTIVE_ADDR << 1) | 1) { i2c_stop(); return None; }
     let val = i2c_read_byte(false); // NACK (single byte read)
     i2c_stop();
     Some(val)
@@ -202,10 +225,10 @@ unsafe fn read_reg(reg: u8) -> Option<u8> {
 unsafe fn read_regs(start_reg: u8, buf: &mut [u8]) -> bool {
     if buf.is_empty() { return true; }
     i2c_start();
-    if !i2c_write_byte((IMU_ADDR << 1) | 0) { i2c_stop(); return false; }
+    if !i2c_write_byte((ACTIVE_ADDR << 1) | 0) { i2c_stop(); return false; }
     if !i2c_write_byte(start_reg) { i2c_stop(); return false; }
     i2c_start(); // repeated start
-    if !i2c_write_byte((IMU_ADDR << 1) | 1) { i2c_stop(); return false; }
+    if !i2c_write_byte((ACTIVE_ADDR << 1) | 1) { i2c_stop(); return false; }
     for i in 0..buf.len() {
         let last = i == buf.len() - 1;
         buf[i] = i2c_read_byte(!last); // ACK all except last
@@ -225,15 +248,19 @@ pub fn init() -> u32 {
     unsafe {
         gpio_init();
 
-        // Check WHO_AM_I
+        // Probe primary address (0x6A), then alternate (0x6B)
+        ACTIVE_ADDR = IMU_ADDR;
         let who = match read_reg(WHO_AM_I) {
-            Some(v) => v,
-            None => return 0,
+            Some(v) if v == WHO_AM_I_VAL => v,
+            _ => {
+                // Try alternate address (SDO/SA0 pulled high on some boards)
+                ACTIVE_ADDR = IMU_ADDR_ALT;
+                match read_reg(WHO_AM_I) {
+                    Some(v) if v == WHO_AM_I_VAL => v,
+                    _ => return 0,
+                }
+            }
         };
-        if who != WHO_AM_I_VAL {
-            // Try alternate address 0x6B
-            return 0;
-        }
 
         // Configure accelerometer: 104 Hz, ±2g
         // CTRL1_XL = 0x40: ODR=104Hz(0100), FS=±2g(00), BW=400Hz(00)

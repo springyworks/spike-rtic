@@ -1,5 +1,9 @@
 # LEGO SPIKE Prime Hub — RTIC v2 Firmware
 
+[User Manual](USER_MANUAL.md) · [Reference Manual](REFERENCE_MANUAL.md) · [API Reference](spike-hub-api/README.md) · [RAM Demos](examples/hub-ram-demos/README.md) · [Helper Tools](helper-tools/README.md) · [Dev Notes](dev_notes/)
+
+---
+
 Bare-metal Rust firmware for the **LEGO SPIKE Prime Hub** using **RTIC v2**.  
 An interactive **Demon-style debug monitor** over USB CDC serial — poke  
 registers, dump memory, control motors and sensors, upload binaries,  
@@ -7,7 +11,7 @@ set DWT hardware watchpoints, and connect GDB over RSP — all without a
 hardware debugger.
 
 > **Status:** proof-of-concept, improving steadily.  
-> **Firmware size:** ~140 KB of the available 992 KB internal flash.
+> **Firmware size:** ~153 KB of the available 992 KB internal flash.
 
 ---
 
@@ -28,7 +32,8 @@ hardware debugger.
 ## Quick Start
 
 ```bash
-# Build the firmware (from project root)
+# Build the firmware
+cd $PROJECT_ROOT
 cargo build --release
 
 # Convert to binary (ALWAYS to target/spike-rtic.bin)
@@ -37,7 +42,7 @@ arm-none-eabi-objcopy -O binary \
     target/spike-rtic.bin
 
 # Flash (enter DFU mode first — see USER_MANUAL §5.1)
-dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D target/spike-rtic.bin
+dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D $PROJECT_ROOT/target/spike-rtic.bin
 
 # Connect
 picocom /dev/ttyACM0
@@ -75,8 +80,10 @@ Full hardware details in [REFERENCE_MANUAL.md §1](REFERENCE_MANUAL.md#1-hardwar
 - **GDB RSP stub** — remote debug over USB CDC: continue, step, halt, registers, memory, watchpoints, backtrace — no JTAG needed
 - **LLDB / CodeLLDB support** — same RSP stub works with LLDB (vCont, QStartNoAckMode, sequential registers)
 - **VS Code F5 debugging** — automated build → upload → GDB/LLDB attach pipeline (xtask preLaunchTask)
+- **Bidirectional demo I/O** — host→demo text channel via `send` shell command + EVT_INPUT events
+- **6-DOF IMU driver** — LSM6DS3TR-C accel+gyro via I2C2 bit-bang with bus-reset recovery
 - **Unix-style process management** — kill -9/-2/-15, Ctrl-C, ring-button zones, pause/resume
-- **MonitorApi v10** — 24-field callback table for demo↔firmware interface
+- **MonitorApi v12** — 26-field callback table for demo↔firmware interface
 - **32 MB external flash** — store/load/run demos from SPI flash
 - **MPU guard bands** — stack overflow detection with fault marker surviving reset
 - **65 automated tests** pass

@@ -92,25 +92,40 @@ const ADC_SMPR2: u32 = 0x10;
 const ADC_SQR1: u32 = 0x2C;
 const ADC_SQR3: u32 = 0x34;
 const ADC_DR: u32 = 0x4C;
+const ADC_CCR: u32 = 0x04; // Common control register (at ADC1 + 0x300)
 
 // ── Button flags (re-exported from shared API crate) ──
 pub use spike_hub_api::{BTN_CENTER, BTN_LEFT, BTN_RIGHT};
 
-/// Initialize ADC1 for button reading.
+/// Initialize ADC1 for button and battery readings.
 unsafe fn init_button_adc() {
-    reg_modify(RCC, RCC_AHB1ENR, 0, (1 << 0) | (1 << 2)); // GPIOA + GPIOC
+    reg_modify(RCC, RCC_AHB1ENR, 0, (1 << 0) | (1 << 1) | (1 << 2)); // GPIOA+B+C
     reg_modify(RCC, RCC_APB2ENR, 0, 1 << 8); // ADC1
     let _ = reg_read(RCC, RCC_APB2ENR);
 
-    // PC4 analog (center button ADC ch14)
-    reg_modify(pins::GPIOC, pins::MODER, 3 << 8, 3 << 8);
-    // PA1 analog (left/right/BT button ADC ch1)
-    reg_modify(pins::GPIOA, pins::MODER, 3 << 2, 3 << 2);
+    // Configure all used analog pins to MODER=0b11 (analog):
+    // PA1 (ch1)  — button left/right/BT ladder
+    // PA3 (ch3)  — USB charger current sense
+    reg_modify(pins::GPIOA, pins::MODER, (3 << 2) | (3 << 6),
+                                          (3 << 2) | (3 << 6));
+    // PB0 (ch8)  — battery NTC thermistor
+    reg_modify(pins::GPIOB, pins::MODER, 3 << 0, 3 << 0);
+    // PC0 (ch10) — battery current
+    // PC1 (ch11) — battery voltage
+    // PC4 (ch14) — center button + /CHG resistor ladder
+    reg_modify(pins::GPIOC, pins::MODER,
+        (3 << 0) | (3 << 2) | (3 << 8),
+        (3 << 0) | (3 << 2) | (3 << 8));
 
-    // Single conversion, 480-cycle sample time
+    // Single conversion, 480-cycle sample time for all analog channels.
+    // SMPR2 covers ch0–ch9 (3 bits each).
+    // SMPR1 covers ch10–ch18 (3 bits each).
+    // Set all to 7 (480 cycles) — the whole register.
     reg_write(ADC1, ADC_SQR1, 0);
-    reg_modify(ADC1, ADC_SMPR1, 7 << 12, 7 << 12); // ch14
-    reg_modify(ADC1, ADC_SMPR2, 7 << 3, 7 << 3);   // ch1
+    reg_write(ADC1, ADC_SMPR2, 0x3FFF_FFFF); // ch0–ch9 all 480 cycles
+    reg_write(ADC1, ADC_SMPR1, 0x07FF_FFFF); // ch10–ch17 all 480 cycles
+    // Enable internal temp sensor + VREFINT (TSVREFE bit in ADC_CCR)
+    reg_modify(ADC1 + 0x300, ADC_CCR, 0, 1 << 23); // TSVREFE = 1
     reg_modify(ADC1, ADC_CR2, 0, 1 << 0); // ADON
 }
 
@@ -118,6 +133,12 @@ unsafe fn init_button_adc() {
 pub fn read_adc(channel: u32) -> u32 {
     unsafe {
         reg_write(ADC1, ADC_SQR3, channel);
+        // Dummy conversion: after switching channels the S/H cap
+        // still holds the previous channel's charge.  Discard it.
+        reg_modify(ADC1, ADC_CR2, 0, 1 << 30); // SWSTART
+        while reg_read(ADC1, ADC_SR) & (1 << 1) == 0 {} // wait EOC
+        let _ = reg_read(ADC1, ADC_DR);         // discard
+        // Real conversion
         reg_modify(ADC1, ADC_CR2, 0, 1 << 30); // SWSTART
         while reg_read(ADC1, ADC_SR) & (1 << 1) == 0 {} // wait EOC
         reg_read(ADC1, ADC_DR)
@@ -201,6 +222,9 @@ mod app {
 
         // ── Buttons (ADC) ──
         unsafe { init_button_adc() };
+
+        // ── Charger ISET PWM (TIM5 CH1 on PA0) ──
+        unsafe { power::init_charger_iset() };
 
         // ── Motor ports (TIM1/TIM3/TIM4 PWM) ──
         unsafe { motor::init() };
@@ -508,29 +532,104 @@ mod app {
         );
     }
 
-    /// Heartbeat: blink center pixel and update uptime.
+    /// Heartbeat: blink center pixel, manage charger, update battery LED.
+    ///
+    /// The battery LED now shows a layered display:
+    ///   Base pattern — driven by charger status (LEGO-like):
+    ///     Charging:     green 1 s on / 1 s off
+    ///     Complete:     solid dim green
+    ///     Fault:        amber blink
+    ///     Discharging:  off (or dim battery-level colour)
+    ///   Smart overlay — brief colour pulse when USB activity detected:
+    ///     RX:   green flash   (1 tick = 500 ms)
+    ///     TX:   blue flash
+    ///     Both: cyan flash
     #[task(shared = [shell], priority = 2)]
     async fn heartbeat(mut cx: heartbeat::Context) {
         task_state::mark_active(task_state::HEARTBEAT);
         let mut on = false;
         let mut sent_banner = false;
         let mut ticks: u32 = 0;
+        let mut charger = power::ChargerState::new();
+        let mut low_bat_warned = false;
+        let mut morse = led_matrix::MorseBlinker::new();
 
         loop {
             on = !on;
             ticks = ticks.wrapping_add(1);
             led_matrix::set_pixel(12, if on { 30 } else { 5 });
 
-            // USB activity indicator on tiny LED near USB port (BATTERY_LED)
-            let (rx, tx) = task_state::take_usb_activity();
-            match (rx, tx) {
-                (true, true)   => led_matrix::set_status_rgb(pins::BATTERY_LED, 0, 0x3000, 0x3000), // cyan: both
-                (true, false)  => led_matrix::set_status_rgb(pins::BATTERY_LED, 0, 0x4000, 0),      // green: RX
-                (false, true)  => led_matrix::set_status_rgb(pins::BATTERY_LED, 0, 0, 0x4000),      // blue: TX
-                (false, false) => led_matrix::set_status_rgb(pins::BATTERY_LED, 0, 0, 0),           // off: idle
+            // ── Charger state machine (500 ms tick) ──
+            charger.tick();
+
+            // ── Morse battery LED ──
+            // Map charger status to Morse pattern (CH/HI/NG/BT)
+            let morse_id = match charger.status {
+                power::ChargerStatus::Charging    => led_matrix::MORSE_CHARGING,
+                power::ChargerStatus::Complete    => led_matrix::MORSE_COMPLETE,
+                power::ChargerStatus::Fault       => led_matrix::MORSE_FAULT,
+                power::ChargerStatus::Discharging => led_matrix::MORSE_BATTERY,
+            };
+            morse.set_status(morse_id);
+
+            // Bright (mark) and dim (space) colours for this status
+            let (bright, dim): ((u16, u16, u16), (u16, u16, u16)) = match charger.status {
+                power::ChargerStatus::Charging => (
+                    (0, 0x6000, 0), (0, 0x0800, 0)      // green
+                ),
+                power::ChargerStatus::Complete => (
+                    (0, 0x4000, 0), (0, 0x1000, 0)      // green (dimmer mark)
+                ),
+                power::ChargerStatus::Fault => (
+                    (0x6000, 0x2000, 0), (0x0800, 0x0400, 0) // amber
+                ),
+                power::ChargerStatus::Discharging => {
+                    let mv = power::battery_mv();
+                    if mv > 7600 {
+                        ((0, 0x4000, 0), (0, 0x0400, 0))    // green
+                    } else if mv > 7000 {
+                        ((0x4000, 0x2000, 0), (0x0400, 0x0200, 0)) // amber
+                    } else {
+                        ((0x8000, 0, 0), (0x0800, 0, 0))    // red
+                    }
+                }
+            };
+
+            // Four 125 ms sub-ticks per heartbeat (Farnsworth Morse)
+            for _ in 0..4u8 {
+                let (r, g, b) = if morse.is_mark() { bright } else { dim };
+                morse.advance();
+
+                // USB data flash: brief blue pulse, then restore Morse colour
+                let (rx, tx) = task_state::take_usb_activity();
+                if rx || tx {
+                    led_matrix::set_status_rgb(pins::BATTERY_LED, 0, 0, 0x6000);
+                    unsafe { led_matrix::update() };
+                    Mono::delay(80.millis()).await;
+                    led_matrix::set_status_rgb(pins::BATTERY_LED, r, g, b);
+                    unsafe { led_matrix::update() };
+                    Mono::delay(45.millis()).await;
+                } else {
+                    led_matrix::set_status_rgb(pins::BATTERY_LED, r, g, b);
+                    unsafe { led_matrix::update() };
+                    Mono::delay(125.millis()).await;
+                }
             }
 
-            unsafe { led_matrix::update() };
+            // ── Low battery warning / shutdown ──
+            if !power::vbus_present() && ticks % 20 == 0 {
+                let mv = power::battery_mv();
+                if mv < power::BATTERY_CRITICAL_MV && mv > 1000 {
+                    // Below 5800 mV (2.9V/cell) — shut down to protect the cells.
+                    power::deep_sleep();
+                } else if mv < 6200 && !low_bat_warned {
+                    low_bat_warned = true;
+                    // Brief warning beep
+                    sound::play(440);
+                    Mono::delay(80.millis()).await;
+                    sound::stop();
+                }
+            }
 
             cx.shared.shell.lock(|shell| {
                 shell.tick();
@@ -548,7 +647,6 @@ mod app {
 
             watchdog::feed();
             unsafe { watchdog::snapshot(ticks); }
-            Mono::delay(500.millis()).await;
         }
     }
 

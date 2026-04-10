@@ -1,5 +1,9 @@
 # hub-ram-demos — RAM Demo Binaries for SPIKE Prime Hub
 
+[← Main README](../../README.md) · [User Manual](../../USER_MANUAL.md) · [Reference Manual](../../REFERENCE_MANUAL.md) · [API Reference](../../spike-hub-api/README.md) · [Helper Tools](../../helper-tools/README.md)
+
+---
+
 Small `no_std` Rust programs that run from SRAM2 on the LEGO SPIKE Prime
 hub.  Uploaded via COBS over USB CDC, executed via the firmware's `go`
 command — no reflash required.
@@ -62,8 +66,8 @@ Power on the hub and connect a terminal to `/dev/ttyACM0` (or
 ```bash
 # From the host:
 python3 $PROJECT_ROOT/helper-tools/upload_demo.py dual_motors.bin
-# Or with the controller:
-python3 $PROJECT_ROOT/helper-tools/spike_hub_controller.py upload dual_motors.bin
+# Or with hub.py:
+python3 $PROJECT_ROOT/helper-tools/hub.py run dual_motors.bin
 
 # In the hub shell:
 spike> bininfo
@@ -127,8 +131,8 @@ for ring button zone details and the re-run workflow.
 ### 2.2 MonitorApi Callback Table
 
 The `MonitorApi` is a `#[repr(C)]` struct defined in the shared
-[`spike-hub-api`](../../spike-hub-api/) crate.  Current version: **10**
-(24 fields, 96 bytes on 32-bit ARM).
+[`spike-hub-api`](../../spike-hub-api/) crate.  Current version: **12**
+(26 fields, 104 bytes on 32-bit ARM).
 
 | # | Field | Signature | SVC | Since |
 |---|-------|-----------|-----|-------|
@@ -156,6 +160,8 @@ The `MonitorApi` is a `#[repr(C)]` struct defined in the shared
 | 21 | `imu_init` | `fn() → u32` | 19 | v10 |
 | 22 | `imu_read` | `fn(buf, len) → u32` | 20 | v10 |
 | 23 | `set_hub_led` | `fn(r, g, b)` | 21 | v10 |
+| 24 | `wait_event` | `fn(mask, timeout_ms) → u32` | 22 | v11 |
+| 25 | `read_input` | `fn(buf, len) → u32` | 23 | v12 |
 
 See the [main README §5.3](../../README.md#53-monitorapi--callback-table) for details.
 
@@ -211,6 +217,7 @@ tag definitions and usage patterns.
 | `pwm-diag`         | `examples/pwm_diag.rs`           | v2+  | PWM diagnostics on motor ports |
 | `reg-dump`         | `examples/reg_dump.rs`           | v2+  | Hardware register inspection |
 | `sensor-dump`      | `examples/sensor_dump.rs`        | v3+  | Raw RGBI hex dump + ring buffer diagnostics |
+| `event-driven`     | `examples/event_driven.rs`       | v12+ | Event-driven demo: IMU, thermal, buttons, host input (EVT_*) |
 
 **Default port layout:** motors on ports **A** and **B**, color sensor
 on port **F**.
@@ -275,8 +282,8 @@ pub extern "C" fn _start(api: *const MonitorApi) -> u32 {
     let api = unsafe { &*api };
 
     // Check API version
-    if api.version < 7 {
-        api.print(b"ERR: need API v7+\r\n");
+    if api.version < 12 {
+        api.print(b"ERR: need API v12+\r\n");
         return 1;
     }
 

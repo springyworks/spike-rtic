@@ -27,73 +27,45 @@ except ImportError:
     print("FATAL: pyserial not installed. Run: pip install pyserial")
     sys.exit(1)
 
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import find_shell_port, open_serial, BAUD
+
 # ── Configuration ──
 
-BAUD = 115200
 READ_TIMEOUT = 0.3
 PROMPT = b"spike> "
 SEPARATOR = "=" * 60
 
 
-# ── Intelligent port detection ──
+# ── Port detection (delegates to spike_port, with brute-force fallback) ──
 
 def find_hub_port() -> str:
+    """Find SPIKE hub shell port.
+
+    Uses shared spike_port module (symlinks → sysfs → VID:PID).
+    Falls back to brute-force ttyACM* probing for non-LEGO VID boards.
     """
-    Intelligently find the SPIKE Prime hub CDC serial port.
-    Tries multiple strategies in order:
-      1. LEGO VID (0x0694) — runtime RTIC firmware
-      2. STM32 VID (0x0483) — if using stock ST USB PID
-      3. Description matching ('spike', 'lego', 'stm32', 'cdc')
-      4. Fallback: first /dev/ttyACM* that is openable
-    """
-    candidates = []
+    port = find_shell_port()
+    if port:
+        print(f"  [spike_port] {port}")
+        return port
 
-    for p in serial.tools.list_ports.comports():
-        desc = (p.description or "").lower()
-        vid = p.vid or 0
-        pid = p.pid or 0
-        tag = f"{p.device}  VID:PID={vid:04X}:{pid:04X}  [{p.description}]"
-
-        # Strategy 1: LEGO VID
-        if vid == 0x0694:
-            print(f"  [LEGO device] {tag}")
-            return p.device
-
-        # Strategy 2: STM32 VID with CDC class
-        if vid == 0x0483:
-            print(f"  [STM32 device] {tag}")
-            candidates.insert(0, p.device)
-            continue
-
-        # Strategy 3: name matching
-        for keyword in ("spike", "lego", "stm32", "cdc", "acm"):
-            if keyword in desc:
-                print(f"  [name match: {keyword}] {tag}")
-                candidates.append(p.device)
-                break
-
-    if candidates:
-        print(f"  -> Using: {candidates[0]}")
-        return candidates[0]
-
-    # Strategy 4: brute-force ttyACM*
+    # Brute-force fallback for unusual VIDs (STM32 dev boards, etc.)
     acm_ports = sorted(glob.glob("/dev/ttyACM*"))
-    for port in acm_ports:
+    for p in acm_ports:
         try:
-            s = serial.Serial(port, BAUD, timeout=0.5)
-            # Send a CR and see if we get a prompt back
+            s = serial.Serial(p, BAUD, timeout=0.5)
             s.reset_input_buffer()
             s.write(b"\r\n")
             time.sleep(0.3)
             data = s.read(256)
             s.close()
             if b"spike>" in data or b"RTIC" in data or b"SPIKE" in data:
-                print(f"  [probe OK] {port} (got shell prompt)")
-                return port
-            else:
-                print(f"  [probe] {port} — no prompt (got {len(data)} bytes)")
+                print(f"  [probe OK] {p} (got shell prompt)")
+                return p
         except (serial.SerialException, OSError) as e:
-            print(f"  [skip] {port} — {e}")
+            print(f"  [skip] {p} — {e}")
 
     if acm_ports:
         print(f"  [fallback] {acm_ports[0]}")
@@ -116,8 +88,8 @@ class HubConnection:
                 self.ser.close()
             except Exception:
                 pass
-        self.ser = serial.Serial(self.port, BAUD, timeout=READ_TIMEOUT,
-                                 write_timeout=5.0, dsrdtr=False, rtscts=False)
+        self.ser = open_serial(self.port, BAUD, timeout=READ_TIMEOUT)
+        self.ser.write_timeout = 5.0
         time.sleep(0.3)
         self.ser.reset_input_buffer()
 
@@ -678,9 +650,12 @@ def run_all_tests(conn: HubConnection):
     t.log("")
     t.log("─── Phase 10b: Demo Upload & Execute ───")
 
-    # Locate demo binary relative to this test script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    demo_bin = os.path.join(script_dir, "hub-ram-demos", "spike-demo.bin")
+    # Locate demo binary via $PROJECT_ROOT
+    demo_bin = os.path.join(
+        os.environ.get("PROJECT_ROOT",
+                       os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "examples", "hub-ram-demos", "target", "spike-usr_bins", "spike_demo.bin"
+    )
 
     if os.path.isfile(demo_bin):
         demo_size = os.path.getsize(demo_bin)

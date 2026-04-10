@@ -30,11 +30,12 @@
 
 - **Build firmware:**
   ```sh
+  cd $PROJECT_ROOT
   cargo build --release
   ```
 - **Build RAM demos:**
   ```sh
-  cd examples/hub-ram-demos
+  cd $PROJECT_ROOT/examples/hub-ram-demos
   cargo build --release
   ```
 - **Extract demo binary:**
@@ -43,11 +44,11 @@
   ```
 - **Flash firmware:**
   ```sh
-  dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D target/spike-rtic.bin
+  dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D $PROJECT_ROOT/target/spike-rtic.bin
   ```
 - **Upload & run demo:**
   ```sh
-  python3 helper-tools/upload_demo.py <demo>.bin
+  python3 $PROJECT_ROOT/helper-tools/upload_demo.py <demo>.bin
   ```
 
 ## Key Conventions

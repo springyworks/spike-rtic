@@ -7,11 +7,10 @@
 //! Compatible with fldigi RTTY-45 defaults (170 Hz shift, 1.5 stop bits).
 //!
 //! FSK tones chosen for ~170 Hz shift after DAC timer rounding:
-//!   Mark  (1) = 2700 Hz req → actual 2760.0 Hz  (lower tone)
-//!   Space (0) = 2900 Hz req → actual 2932.6 Hz  (higher tone)
-//!   Actual shift ≈ 172 Hz  (fldigi 170 Hz setting decodes OK)
-//!   Half-volume mode (MAMP=8): Mark 2762.7 Hz, Space 2933.7 Hz,
-//!   shift = 171.0 Hz — within fldigi filter bandwidth.
+//!   Mark  (1) = 1500 Hz req → actual 1515.4 Hz  (lower tone)
+//!   Space (0) = 1670 Hz req → actual 1677.3 Hz  (higher tone)
+//!   Actual shift ≈ 162 Hz  (within decoder filter bandwidth)
+//!   (MAMP=8 / play_quiet, CYCLE=1022, 96 MHz timer clock)
 //!
 //! Standard convention: Mark = lower frequency, Space = Mark + shift.
 //! Idle line state = Mark (continuous lower tone).
@@ -39,15 +38,15 @@ pub fn mark_idle() { BUSY.store(false, Ordering::Release); }
 pub fn is_busy() -> bool { BUSY.load(Ordering::Acquire) }
 
 // ── FSK parameters (pub for main.rs task) ──
-pub const MARK_HZ: u32 = 2700;  // logical 1 → actual 2760 Hz (full) / 2763 Hz (quiet)
-pub const SPACE_HZ: u32 = 2900; // logical 0 → actual 2933 Hz (full) / 2934 Hz (quiet)
+pub const MARK_HZ: u32 = 1500;  // logical 1 → actual 1515.4 Hz (quiet, ARR=61)
+pub const SPACE_HZ: u32 = 1670; // logical 0 → actual 1677.3 Hz (quiet, ARR=55)
 
 /// Bit duration at 45.45 baud: 22 ms
 pub const BIT_MS: u32 = 22;
 /// Stop bit duration: 1.5 × 22 = 33 ms  (fldigi default)
 pub const STOP_MS: u32 = 33;
 /// Number of LTRS diddle characters for preamble and postamble sync.
-pub const DIDDLE_COUNT: u32 = 3;
+pub const DIDDLE_COUNT: u32 = 4;
 
 // ── ITA2 / Baudot encoding ──
 

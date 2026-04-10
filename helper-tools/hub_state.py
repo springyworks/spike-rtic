@@ -25,6 +25,12 @@ import sys
 import subprocess
 import time
 
+# ── Project root: $PROJECT_ROOT or derived from this script's location ──
+PROJECT_ROOT = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
 try:
     import serial
     import serial.tools.list_ports
@@ -32,29 +38,22 @@ except ImportError:
     print("FATAL: pyserial not installed.  pip install pyserial", file=sys.stderr)
     sys.exit(99)
 
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import (
+    find_shell_port, find_gdb_port as find_gdb_port_,
+    is_dfu_present, free_port, open_serial,
+    LEGO_VID, DFU_PID, RUNTIME_PID, BAUD,
+    hub_status as print_port_table,
+)
+
 # ── Constants ──
-LEGO_VID    = 0x0694
-DFU_PID     = 0x0011
-RUNTIME_PID = 0x0042
-BAUD        = 115200
 PROBE_TIMEOUT = 0.8   # seconds to wait for shell prompt
 
 
 def find_lego_serial():
-    """Return port path if LEGO runtime CDC is present, else None."""
-    for p in serial.tools.list_ports.comports():
-        if (p.vid or 0) == LEGO_VID and (p.pid or 0) == RUNTIME_PID:
-            return p.device
-    return None
-
-
-def is_dfu_present():
-    """Check lsusb for LEGO DFU device."""
-    try:
-        out = subprocess.check_output(["lsusb"], text=True, timeout=5)
-        return f"{LEGO_VID:04x}:{DFU_PID:04x}" in out.lower()
-    except Exception:
-        return False
+    """Return shell port path if LEGO runtime CDC is present, else None."""
+    return find_shell_port()
 
 
 def probe_serial(port):
@@ -124,7 +123,7 @@ def detect_state():
 def enter_rsp(port):
     """Send 'gdb' command to switch hub from shell to RSP mode."""
     try:
-        ser = serial.Serial(port, BAUD, timeout=1)
+        ser = open_serial(port, BAUD, timeout=1)
         ser.reset_input_buffer()
         ser.write(b"gdb\r\n")
         ser.flush()
@@ -152,51 +151,8 @@ def launch_gdb(port, elf_path=None):
 
 
 def kill_port_holder(port):
-    """Find and kill -9 the process holding `port`. Returns True if killed."""
-    import signal
-    try:
-        out = subprocess.check_output(["fuser", port], stderr=subprocess.STDOUT, text=True, timeout=5)
-    except FileNotFoundError:
-        # fuser not installed — try lsof
-        try:
-            out = subprocess.check_output(["lsof", "-t", port], text=True, timeout=5)
-        except Exception:
-            print(f"  Cannot find process holding {port} (install fuser or lsof).")
-            return False
-    except subprocess.CalledProcessError:
-        print(f"  No process found holding {port}.")
-        return False
-    except subprocess.TimeoutExpired:
-        return False
-
-    pids = [int(p) for p in out.split() if p.strip().isdigit()]
-    if not pids:
-        print(f"  No PIDs found for {port}.")
-        return False
-
-    my_pid = os.getpid()
-    for pid in pids:
-        if pid == my_pid:
-            continue
-        # Identify what we're killing
-        try:
-            cmdline = subprocess.check_output(
-                ["ps", "-p", str(pid), "-o", "comm="], text=True, timeout=3
-            ).strip()
-        except Exception:
-            cmdline = "?"
-        print(f"  Killing PID {pid} ({cmdline}) holding {port}...")
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass  # already gone
-        except PermissionError:
-            print(f"  Permission denied killing PID {pid}. Try: sudo kill -9 {pid}")
-            return False
-
-    # Wait for port to become available
-    time.sleep(0.5)
-    return True
+    """Find and kill the process holding `port`. Delegates to spike_port.free_port()."""
+    return free_port(port)
 
 
 # ── Main ──
@@ -219,6 +175,9 @@ def main():
 
     # ── Just detect ──
     if action is None:
+        # Show detailed port table first
+        print_port_table()
+
         labels = {
             0: "\033[91mDisconnected\033[0m  -- no LEGO USB device",
             1: "\033[93mDFU mode\033[0m      -- ready to flash (0694:0011)",

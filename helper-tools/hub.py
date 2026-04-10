@@ -23,6 +23,12 @@ import time
 import subprocess
 import glob
 
+# ── Project root: $PROJECT_ROOT or derived from this script's location ──
+PROJECT_ROOT = os.environ.get(
+    "PROJECT_ROOT",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
 try:
     import serial
     import serial.tools.list_ports
@@ -30,13 +36,16 @@ except ImportError:
     print("FATAL: pyserial not installed.  pip install pyserial")
     sys.exit(1)
 
+# Shared port detection (prefer symlinks → sysfs → VID:PID scan)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from spike_port import (
+    find_shell_port, is_dfu_present, open_serial,
+    LEGO_VID, DFU_PID, RUNTIME_PID, BAUD,
+)
+
 # ── Constants ──
-LEGO_VID     = 0x0694
-DFU_PID      = 0x0011
-RUNTIME_PID  = 0x0042
-BAUD         = 115200
 FLASH_ADDR   = "0x08008000"
-BIN_PATH     = "target/spike-rtic.bin"
+BIN_PATH     = os.path.join(PROJECT_ROOT, "target", "spike-rtic.bin")
 DFU_ARGS     = ["dfu-util", "-d", "0694:0011", "-a", "0",
                 "-s", f"{FLASH_ADDR}:leave", "-D"]
 
@@ -49,19 +58,13 @@ C_RESET  = "\033[0m"
 
 def hub_state():
     """Return ('dfu', dev), ('serial', port), or ('disconnected', None)."""
-    # Check pyserial first for runtime CDC
-    for p in serial.tools.list_ports.comports():
-        vid = p.vid or 0
-        pid = p.pid or 0
-        if vid == LEGO_VID and pid == RUNTIME_PID:
-            return ("serial", p.device)
+    # Use shared detection (prefers symlinks → sysfs → VID:PID scan)
+    port = find_shell_port()
+    if port:
+        return ("serial", port)
     # Check lsusb for DFU (no serial port exposed)
-    try:
-        out = subprocess.check_output(["lsusb"], text=True, timeout=5)
-        if f"{LEGO_VID:04x}:{DFU_PID:04x}" in out.lower():
-            return ("dfu", None)
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    if is_dfu_present():
+        return ("dfu", None)
     return ("disconnected", None)
 
 
@@ -95,9 +98,9 @@ def wait_for_state(target, timeout=30, quiet=False):
     return hub_state()
 
 
-def open_serial(port, timeout=0.5):
+def open_hub_serial(port, timeout=0.5):
     """Open serial connection to hub."""
-    ser = serial.Serial(port, BAUD, timeout=timeout)
+    ser = open_serial(port, BAUD, timeout=timeout)
     time.sleep(0.1)
     ser.reset_input_buffer()
     return ser
@@ -128,7 +131,7 @@ def do_flash(bin_path=BIN_PATH):
     if st == "serial":
         print(f"  Hub is running — sending 'dfu' command...")
         try:
-            ser = open_serial(det)
+            ser = open_hub_serial(det)
             send_cmd(ser, "dfu", wait=0.5)
             ser.close()
         except Exception as e:
@@ -195,7 +198,7 @@ def do_cmd(commands, wait_per_cmd=2.0):
         return False
 
     try:
-        ser = open_serial(det)
+        ser = open_hub_serial(det)
     except Exception as e:
         print(f"  {C_RED}Can't open {det}: {e}{C_RESET}")
         return False
@@ -254,7 +257,7 @@ def do_run(bin_path, pre_cmds=None, timeout_s=30):
         return False
 
     try:
-        ser = open_serial(det)
+        ser = open_hub_serial(det)
     except Exception as e:
         print(f"  {C_RED}Can't open {det}: {e}{C_RESET}")
         return False
@@ -336,7 +339,7 @@ def do_monitor():
         print(f"  {C_RED}Hub not available{C_RESET}")
         return
 
-    ser = open_serial(det, timeout=0.1)
+    ser = open_hub_serial(det, timeout=0.1)
     print(f"  {C_GREEN}Monitoring {det} — Ctrl-C to stop{C_RESET}")
     try:
         while True:

@@ -21,21 +21,21 @@ Exit code matches the state number, so scripts can branch on `$?`.
 
 ```bash
 # Just detect and print state:
-python3 helper-tools/hub_state.py
+python3 $PROJECT_ROOT/helper-tools/hub_state.py
 
 # Enter RSP mode + launch gdb-multiarch (all-in-one):
-python3 helper-tools/hub_state.py gdb
+python3 $PROJECT_ROOT/helper-tools/hub_state.py gdb
 
 # Same, but with debug symbols from a demo ELF:
-python3 helper-tools/hub_state.py gdb \
-  examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple
+python3 $PROJECT_ROOT/helper-tools/hub_state.py gdb \
+  $PROJECT_ROOT/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple
 
 # Reconnect to hub already in RSP mode (after serial drop):
-python3 helper-tools/hub_state.py gdb-reconnect
+python3 $PROJECT_ROOT/helper-tools/hub_state.py gdb-reconnect
 
 # Reconnect with symbols:
-python3 helper-tools/hub_state.py gdb-reconnect \
-  examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple
+python3 $PROJECT_ROOT/helper-tools/hub_state.py gdb-reconnect \
+  $PROJECT_ROOT/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple
 ```
 
 ## What each action does
@@ -67,20 +67,20 @@ python3 helper-tools/hub_state.py gdb-reconnect \
 
 ```bash
 # Build + objcopy the demo
-cd examples/hub-ram-demos
+cd $PROJECT_ROOT/examples/hub-ram-demos
 cargo build --example gdb_simple --release
 arm-none-eabi-objcopy -O binary \
   target/thumbv7em-none-eabihf/release/examples/gdb_simple \
   target/spike-usr_bins/gdb_simple.bin
-cd ../..
+cd $PROJECT_ROOT
 
 # Upload the demo
-python3 helper-tools/upload_demo.py \
-  examples/hub-ram-demos/target/spike-usr_bins/gdb_simple.bin
+python3 $PROJECT_ROOT/helper-tools/upload_demo.py \
+  $PROJECT_ROOT/examples/hub-ram-demos/target/spike-usr_bins/gdb_simple.bin
 
 # One command: detect state, enter RSP, launch GDB with symbols
-python3 helper-tools/hub_state.py gdb \
-  examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple
+python3 $PROJECT_ROOT/helper-tools/hub_state.py gdb \
+  $PROJECT_ROOT/examples/hub-ram-demos/target/thumbv7em-none-eabihf/release/examples/gdb_simple
 ```
 
 Then in `(gdb)`:

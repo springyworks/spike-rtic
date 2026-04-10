@@ -99,12 +99,23 @@
 			"problemMatcher": "$rustc"
 		},
 
+		// ── Hub connect: status + open serial shell ──
+		{
+			"label": "hub-connect",
+			"type": "shell",
+			"command": "cargo",
+			"args": ["xtask", "connect"],
+			"presentation": { "reveal": "always", "panel": "dedicated", "focus": true },
+			"problemMatcher": [],
+			"isBackground": true
+		},
+
 		// ── Hub diagnostics ──
 		{
 			"label": "hub-status",
 			"type": "shell",
-			"command": "python3",
-			"args": ["${workspaceFolder}/helper-tools/hub_state.py"],
+			"command": "cargo",
+			"args": ["xtask", "status"],
 			"presentation": { "reveal": "always", "panel": "shared" },
 			"problemMatcher": []
 		},

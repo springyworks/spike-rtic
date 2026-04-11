@@ -1,6 +1,6 @@
 # spike-hub-api — Shared MonitorApi for SPIKE Prime Hub
 
-[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md)
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
 
 ---
 
@@ -37,9 +37,9 @@ on ARM, used by ARM Demon and Angel debug monitors since the 1980s.
 
 **No C compiler or libc is involved.  Both sides are pure Rust.**
 
-See the [main firmware README](../../README.md#53-monitorapi--callback-table)
+See the [Reference Manual §3.3](../REFERENCE_MANUAL.md#33-monitorapi--callback-table)
 for the architecture overview, and the
-[hub-ram-demos README](../../examples/hub-ram-demos/README.md) for
+[hub-ram-demos README](../examples/hub-ram-demos/README.md) for
 the full build-upload-execute workflow.
 
 ---
@@ -124,7 +124,7 @@ atomic, ~10–20 CPU cycles):
 ```
 
 Dump traces with `trace` in the shell.  See the
-[main README §5.4](../../README.md#54-trace-buffer) for details.
+[Reference Manual §3.4](../REFERENCE_MANUAL.md#34-trace-buffer) for details.
 
 > **Process management:** the firmware can kill a running demo at any
 > time via `kill [-2|-9|-15]`, Ctrl-C, or the ring button.  SIGTERM/SIGINT
@@ -132,7 +132,7 @@ Dump traces with `trace` in the shell.  See the
 > ring button hold 1–6 s) uses `force_kill_sandbox` to hijack the exception
 > return — kills even tight `loop {}` demos.  Demos do not need exit-on-button
 > logic — the firmware handles lifecycle.
-> See the [main README §5.5](../../README.md#55-process-management).
+> See the [User Manual §3](../USER_MANUAL.md#3-process-management).
 
 ---
 

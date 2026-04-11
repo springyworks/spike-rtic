@@ -1,5 +1,10 @@
 # Pybricks LUMP Protocol — Sensor Commands Reference
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 Extracted from Pybricks source (2026-04-02) for SPIKE RTIC firmware development.
 Source: `pybricks-micropython/lib/pbio/src/port_lump.c`, `lib/lego/lego/lump.h`, `lib/lego/lego/device.h`
 

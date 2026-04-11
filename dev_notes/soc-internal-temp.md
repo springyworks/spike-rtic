@@ -1,3 +1,7 @@
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
 Yes, the LEGO SPIKE Prime (and Technic Large) Hub's "brain" is an **STM32F413** microcontroller, which does include a dedicated **internal temperature sensor** on the die.
 
 However, there is a distinct difference between what this sensor measures versus what you might expect for "environmental" sensing.

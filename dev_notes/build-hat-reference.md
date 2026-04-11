@@ -1,5 +1,10 @@
 # Raspberry Pi Build HAT — LPF2 Protocol Reference
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 Research date: 2026-03-28  
 Source: https://www.raspberrypi.com/documentation/accessories/build-hat.html  
 Python lib: https://github.com/RaspberryPiFoundation/python-build-hat (MIT, v0.9.0)  

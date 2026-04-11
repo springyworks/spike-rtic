@@ -1,5 +1,10 @@
 # USB Serial Port Detection
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 ## Problem
 
 The firmware exposes a dual CDC-ACM USB composite device (VID:PID `0694:0042`):

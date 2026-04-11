@@ -1,3 +1,7 @@
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
 This is a great exercise. Looking closely at your `servo.rs` implementation specifically through the lens of a Rust/RTIC environment, there are a few architectural nuances, potential glitches, and areas for improvement that go beyond the high-level theory.
 
 Here is a re-evaluation of how your specific codebase implements the Laborne + Luenberger combo, highlighting a critical timing glitch and some RTIC-specific improvements.

@@ -1,5 +1,10 @@
 # SPIKE RTIC Sensor Fixes (2025-03-26)
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 ## Root Cause: SVCall blocks sensor_poll
 - SVCall priority 0xF0 = NVIC 15 = same as RTIC priority 1 tasks
 - During SVC #1 (delay_ms), sensor_poll cannot preempt → no keepalives → LUMP 250ms timeout → sensor disconnect

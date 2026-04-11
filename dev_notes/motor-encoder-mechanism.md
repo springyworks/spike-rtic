@@ -1,5 +1,10 @@
 # Motor Encoder on SPIKE Prime Hub - Findings
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 ## Key Result: ALL via UART/LUMP, NO hardware quadrature encoder
 
 - `PBDRV_CONFIG_COUNTER (0)` — counter driver is DISABLED on prime_hub

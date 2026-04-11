@@ -1,3 +1,7 @@
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
 The **MPS MP2639A** is a "hardware-configured" chip. Unlike many modern PMICs (Power Management Integrated Circuits) that use $I^2C$ to set parameters via software, the MP2639A relies almost entirely on the **physical values of resistors and capacitors** connected to its pins to determine its behavior.
 
 Because it lacks internal non-volatile memory or registers, its "defaults" are effectively defined by the manufacturer's recommended external component values.

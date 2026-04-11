@@ -1,0 +1,237 @@
+<mxfile host="65bd71144e">
+    <diagram name="SPIKE-RTIC Architecture" id="arch1">
+        <mxGraphModel dx="4128" dy="4388" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1200" pageHeight="1080" math="1" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="&lt;b&gt;SPIKE-RTIC Firmware Architecture&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=18;" parent="1" vertex="1">
+                    <mxGeometry x="200" y="10" width="700" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="L8_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="50" width="960" height="140" as="geometry"/>
+                </mxCell>
+                <mxCell id="L8_label" value="&lt;b&gt;User Demo Apps&lt;/b&gt;&lt;br&gt;(SRAM2)" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#2D7600;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="50" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="go_sand" value="&lt;b&gt;spike&amp;gt; go&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Sandboxed (unprivileged)&lt;br&gt;Thread mode · PSP&lt;br&gt;MPU enforced&lt;br&gt;SVC traps → MonitorApi&lt;br&gt;SIGTERM / SIGINT / kill -9&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82b366;strokeWidth=2;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="170" y="60" width="420" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="go_priv" value="&lt;b&gt;spike&amp;gt; go!&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Privileged (direct)&lt;br&gt;Thread mode · MSP&lt;br&gt;Direct fn pointers&lt;br&gt;Full HW access&lt;br&gt;No MPU / No SVC&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;strokeWidth=2;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="650" y="60" width="420" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="L7_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="210" width="960" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="L7_label" value="&lt;b&gt;Sandbox&lt;/b&gt;&lt;br&gt;Security" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="210" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="mpu" value="&lt;b&gt;MPU&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;7 regions&lt;br&gt;PRIVDEFENA=1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="220" width="160" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="svc" value="&lt;b&gt;SVC Dispatch&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Thunks for all&lt;br&gt;MonitorApi calls&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="340" y="220" width="170" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="abort" value="&lt;b&gt;Abort Mechanism&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;setjmp / longjmp&lt;br&gt;ABORT flag checked&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="530" y="220" width="170" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="forcekill" value="&lt;b&gt;force_kill&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Hijacks exception&lt;br&gt;return (kill -9)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="720" y="220" width="160" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="guardband" value="&lt;b&gt;Guard Bands&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;MSP + PSP 32B&lt;br&gt;MemManage fault&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="900" y="220" width="180" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="L6_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffd966;strokeColor=#d6b656;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="320" width="960" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="L6_label" value="&lt;b&gt;ABI Bridge&lt;/b&gt;" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#9C6500;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="320" width="120" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="api" value="&lt;b&gt;MonitorApi v12&lt;/b&gt; — 26 fields · 104 bytes · &lt;font face=&quot;monospace&quot;&gt;#[repr(C)] extern &amp;quot;C&amp;quot;&lt;/font&gt;  ·  write_fn · delay_ms · motor_set · sensor_read · imu · sound · trace_record · wait_event · read_input · rtty_say …" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;fontSize=10;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="325" width="920" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="L5_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="390" width="960" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="L5_label" value="&lt;b&gt;Middleware&lt;/b&gt;&lt;br&gt;Shell · Upload" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#AE4132;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="390" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="shell" value="&lt;b&gt;shell.rs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;50+ commands&lt;br&gt;4 KB buffer&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="400" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="upload" value="&lt;b&gt;upload.rs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;COBS + CRC-32&lt;br&gt;→ SRAM2&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="315" y="400" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="trace" value="&lt;b&gt;trace.rs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;256×8B ring&lt;br&gt;atomic, zero-lock&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="400" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="gdb" value="&lt;b&gt;gdb_rsp.rs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;GDB/LLDB stub&lt;br&gt;over USB CDC&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="625" y="400" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="dwt_mod" value="&lt;b&gt;dwt.rs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;4 HW watchpoints&lt;br&gt;DebugMonitor&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="780" y="400" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="sandbox_mod" value="&lt;b&gt;sandbox.rs&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;MPU config&lt;br&gt;run_demo&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="935" y="400" width="145" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="L4_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="510" width="960" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="L4_label" value="&lt;b&gt;Drivers&lt;/b&gt;&lt;br&gt;(src/*.rs)" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#9C6500;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="510" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="motor" value="&lt;b&gt;motor&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;6× H-bridge&lt;br&gt;PWM&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="155" y="520" width="95" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="sensor_drv" value="&lt;b&gt;sensor&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;6× LPF2&lt;br&gt;LUMP UART&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="260" y="520" width="95" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="led" value="&lt;b&gt;led_matrix&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;5×5 TLC5955&lt;br&gt;SPI1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="365" y="520" width="95" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="sound_drv" value="&lt;b&gt;sound&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;TIM4 PWM&lt;br&gt;+ DAC1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="470" y="520" width="85" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="imu_drv" value="&lt;b&gt;imu&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;LSM6DS3&lt;br&gt;I2C bit-bang&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="565" y="520" width="85" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="flash_drv" value="&lt;b&gt;ext_flash&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;W25Q256JV&lt;br&gt;SPI2&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="520" width="95" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="usb_drv" value="&lt;b&gt;usb_serial&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;OTG FS&lt;br&gt;CDC-ACM&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="765" y="520" width="95" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="servo_drv" value="&lt;b&gt;servo&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;PID + observer&lt;br&gt;motor_goto&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="870" y="520" width="85" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="rtty_drv" value="&lt;b&gt;rtty&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Baudot&lt;br&gt;FSK audio&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="965" y="520" width="85" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="L3_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="620" width="960" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="L3_label" value="&lt;b&gt;RTIC v2&lt;/b&gt;&lt;br&gt;Tasks" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#6C3082;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="620" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="rtic_p3" value="&lt;b&gt;P3&lt;/b&gt; UART ISR (sensor sync)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673a6;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="630" width="220" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="rtic_p2" value="&lt;b&gt;P2&lt;/b&gt; heartbeat · sensor_poll · motor · shell · USB ISR" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673a6;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="395" y="630" width="380" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="rtic_p1" value="&lt;b&gt;P1&lt;/b&gt; run_demo · test_all" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9673a6;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="790" y="630" width="290" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="L2_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="710" width="960" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="L2_label" value="&lt;b&gt;Memory&lt;/b&gt;&lt;br&gt;Map" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#2D7600;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="710" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="sram1" value="&lt;b&gt;SRAM1 — 256 KB&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;0x2000_0000&lt;br&gt;Firmware .data/.bss&lt;br&gt;MSP stack (↓) + guard band&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="720" width="220" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="sram2" value="&lt;b&gt;SRAM2 — 64 KB&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;0x2004_0000&lt;br&gt;Demo code+data buffer&lt;br&gt;PSP stack (4 KB) + guard band&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="720" width="220" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="intflash" value="&lt;b&gt;Internal Flash — 1 MB&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;0x0800_0000&lt;br&gt;32 KB bootloader&lt;br&gt;992 KB firmware @ 0x08008000&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="720" width="220" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="extflash" value="&lt;b&gt;Ext Flash — 32 MB&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;W25Q256JV (SPI2)&lt;br&gt;Demo storage&lt;br&gt;store / load / run&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="880" y="720" width="200" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="L1_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;arcSize=6;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="830" width="960" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="L1_label" value="&lt;b&gt;Hardware&lt;/b&gt;" style="text;html=1;align=right;verticalAlign=top;fontSize=11;fontColor=#1A3D6D;" parent="1" vertex="1">
+                    <mxGeometry x="10" y="830" width="120" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="mcu" value="&lt;b&gt;STM32F413VGT6&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:10px&quot;&gt;Cortex-M4F @ 96 MHz · FPU · MPU&lt;/font&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;fontSize=11;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="840" width="300" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_motors" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Motors ×6&lt;/b&gt;&lt;br&gt;H-bridge PWM&lt;br&gt;TIM1/2/3/12&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="890" width="105" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_sensors" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Sensors ×6&lt;/b&gt;&lt;br&gt;LPF2 LUMP&lt;br&gt;UART 115200&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="275" y="890" width="105" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_led" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;LED 5×5&lt;/b&gt;&lt;br&gt;TLC5955&lt;br&gt;SPI1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="390" y="890" width="85" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_usb" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;USB OTG FS&lt;/b&gt;&lt;br&gt;CDC-ACM&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="485" y="890" width="85" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_imu" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;IMU 6-DOF&lt;/b&gt;&lt;br&gt;LSM6DS3TR-C&lt;br&gt;I2C2&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="890" width="95" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_audio" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Piezo&lt;/b&gt;&lt;br&gt;TIM4 + DAC1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="685" y="890" width="80" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_buttons" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Buttons&lt;/b&gt;&lt;br&gt;ADC ladder&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="775" y="890" width="80" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_power" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;Power&lt;/b&gt;&lt;br&gt;LiPo · ADC&lt;br&gt;MP2639A&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="865" y="890" width="80" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="hw_spiflash" value="&lt;font style=&quot;font-size:9px&quot;&gt;&lt;b&gt;SPI Flash&lt;/b&gt;&lt;br&gt;W25Q256JV&lt;br&gt;32 MB&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="955" y="890" width="90" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_go_svc" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;strokeColor=#82b366;strokeWidth=2;" parent="1" source="go_sand" target="svc" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_go_svc_lbl" value="SVC trap" style="edgeLabel;html=1;align=center;verticalAlign=middle;fontSize=9;fontColor=#2D7600;" parent="arr_go_svc" vertex="1" connectable="0">
+                    <mxGeometry x="-0.1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arr_gopriv_api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.8;entryY=0;entryDx=0;entryDy=0;strokeColor=#d6b656;strokeWidth=2;dashed=1;" parent="1" source="go_priv" target="api" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_gopriv_api_lbl" value="direct fn ptr" style="edgeLabel;html=1;align=center;verticalAlign=middle;fontSize=9;fontColor=#9C6500;" parent="arr_gopriv_api" vertex="1" connectable="0">
+                    <mxGeometry x="-0.1" relative="1" as="geometry">
+                        <mxPoint as="offset"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arr_svc_api" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;strokeColor=#666666;strokeWidth=1;" parent="1" source="svc" target="api" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_api_mid" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeColor=#b85450;strokeWidth=1;" parent="1" source="api" target="L5_bg" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_mid_drv" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeColor=#d6b656;strokeWidth=1;" parent="1" source="L5_bg" target="L4_bg" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_drv_rtic" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeColor=#9673a6;strokeWidth=1;" parent="1" source="L4_bg" target="L3_bg" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_rtic_mem" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.3;entryY=0;entryDx=0;entryDy=0;strokeColor=#82b366;strokeWidth=1;" parent="1" source="L3_bg" target="L2_bg" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="arr_mem_hw" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeColor=#6c8ebf;strokeWidth=1;" parent="1" source="L2_bg" target="L1_bg" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend" value="&lt;font style=&quot;font-size:10px&quot;&gt;&lt;b&gt;Legend:&lt;/b&gt;&lt;br&gt;━━ &lt;font color=&quot;#82b366&quot;&gt;go (sandboxed)&lt;/font&gt; — SVC traps, MPU enforced&lt;br&gt;╌╌ &lt;font color=&quot;#d6b656&quot;&gt;go! (privileged)&lt;/font&gt; — direct fn pointers, full access&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=top;fillColor=#FFFFFF;strokeColor=#CCCCCC;rounded=1;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="960" width="350" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="dfu_note" value="&lt;font style=&quot;font-size:10px&quot;&gt;&lt;b&gt;Flash:&lt;/b&gt; dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave&lt;br&gt;&lt;b&gt;Upload:&lt;/b&gt; python3 upload_demo.py &amp;lt;demo&amp;gt;.bin&lt;/font&gt;" style="text;html=1;align=left;verticalAlign=top;fillColor=#FFFFFF;strokeColor=#CCCCCC;rounded=1;" parent="1" vertex="1">
+                    <mxGeometry x="530" y="960" width="370" height="40" as="geometry"/>
+                </mxCell>
+                <object label="Human_interaction" id="mwRkZsXS-SNFr_joFegv-1">
+                    <mxCell style="" parent="0"/>
+                </object>
+                <mxCell id="mwRkZsXS-SNFr_joFegv-2" value="Human_goals" parent="0"/>
+                <mxCell id="mwRkZsXS-SNFr_joFegv-4" value="UNIX" parent="0"/>
+                <mxCell id="mwRkZsXS-SNFr_joFegv-5" value="" style="fontColor=#0066CC;verticalAlign=top;verticalLabelPosition=bottom;labelPosition=center;align=center;html=1;outlineConnect=0;fillColor=#CCCCCC;strokeColor=#6881B3;gradientColor=none;gradientDirection=north;strokeWidth=2;shape=mxgraph.networks.pc;" vertex="1" parent="mwRkZsXS-SNFr_joFegv-4">
+                    <mxGeometry x="1550" y="-230" width="100" height="70" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="35C2cRIi5xCFM2V9rFzt" name="Page-2">
+        <mxGraphModel dx="1616" dy="827" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

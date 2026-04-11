@@ -1,5 +1,10 @@
 # Sensor & Peripheral Extra Power Requirements (2026-04-03)
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 ## Finding: Some LEGO Parts Need Extra PWM-Like Power
 
 After days of testing, we discovered that certain LEGO peripherals (sensors, actuators)  

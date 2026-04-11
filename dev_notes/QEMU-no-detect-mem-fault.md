@@ -1,3 +1,7 @@
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
 Can QEMU do realtime clock?
 Yes and no. QEMU emulates SysTick faithfully — the counter counts down, interrupts fire, Mono::delay(100.millis()).await completes. But it runs at virtual CPU speed, not wall-clock time. A 100ms delay completes near-instantly. This is fine for functional testing (does the code path work?) but not for real-time timing verification.
 

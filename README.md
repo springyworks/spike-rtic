@@ -74,18 +74,18 @@ Full hardware details in [REFERENCE_MANUAL.md §1](REFERENCE_MANUAL.md#1-hardwar
 
 ## Features at a Glance
 
-- **50+ shell commands** — memory dump, register inspect, motor/sensor control, SPI flash
-- **RAM demo sandbox** — upload binaries via COBS, execute sandboxed (MPU + SVC) or privileged
-- **DWT hardware watchpoints** — 4 self-hosted comparators, DebugMonitor exception, no JTAG needed
-- **GDB RSP stub** — remote debug over USB CDC: continue, step, halt, registers, memory, watchpoints, backtrace — no JTAG needed
-- **LLDB / CodeLLDB support** — same RSP stub works with LLDB (vCont, QStartNoAckMode, sequential registers)
-- **VS Code F5 debugging** — automated build → upload → GDB/LLDB attach pipeline (xtask preLaunchTask)
-- **Bidirectional demo I/O** — host→demo text channel via `send` shell command + EVT_INPUT events
-- **6-DOF IMU driver** — LSM6DS3TR-C accel+gyro via I2C2 bit-bang with bus-reset recovery
-- **Unix-style process management** — kill -9/-2/-15, Ctrl-C, ring-button zones, pause/resume
-- **MonitorApi v12** — 26-field callback table for demo↔firmware interface
-- **32 MB external flash** — store/load/run demos from SPI flash
-- **MPU guard bands** — stack overflow detection with fault marker surviving reset
+- **50+ [shell commands](USER_MANUAL.md#2-shell-commands)** — memory dump, register inspect, motor/sensor control, SPI flash
+- **[RAM demo sandbox](USER_MANUAL.md#4-ram-demos)** — upload binaries via COBS, execute sandboxed (MPU + SVC) or privileged
+- **[DWT hardware watchpoints](USER_MANUAL.md#27-dwt-watchpoints)** — 4 self-hosted comparators, DebugMonitor exception, no JTAG needed
+- **[GDB RSP stub](USER_MANUAL.md#28-gdb-remote-debug)** — remote debug over USB CDC: continue, step, halt, registers, memory, watchpoints, backtrace — no JTAG needed
+- **LLDB / [CodeLLDB support](USER_MANUAL.md#vs-code--codelldb-extension)** — same RSP stub works with LLDB (vCont, QStartNoAckMode, sequential registers)
+- **[VS Code F5 debugging](examples/hub-ram-demos/xtask/README.md#the-debug-pipeline)** — automated build → upload → GDB/LLDB attach pipeline (xtask preLaunchTask)
+- **Bidirectional demo I/O** — host→demo text channel via `send` shell command + [EVT_INPUT events](spike-hub-api/README.md#2-api-fields)
+- **[6-DOF IMU driver](USER_MANUAL.md#29-system--misc)** — LSM6DS3TR-C accel+gyro via I2C2 bit-bang with bus-reset recovery
+- **[Unix-style process management](USER_MANUAL.md#3-process-management)** — kill -9/-2/-15, Ctrl-C, ring-button zones, pause/resume
+- **[MonitorApi v12](spike-hub-api/README.md)** — 26-field callback table for demo↔firmware interface
+- **[32 MB external flash](USER_MANUAL.md#26-external-flash-spi2)** — store/load/run demos from SPI flash
+- **[MPU guard bands](REFERENCE_MANUAL.md#5-safety--sandbox)** — stack overflow detection with fault marker surviving reset
 - **65 automated tests** pass
 
 ---
@@ -94,14 +94,25 @@ Full hardware details in [REFERENCE_MANUAL.md §1](REFERENCE_MANUAL.md#1-hardwar
 
 ```
 spike_rtic/
-├── src/                  Firmware source (RTIC app, drivers, shell)
-├── spike-hub-api/        Shared MonitorApi crate
-├── examples/hub-ram-demos/  RAM demo binaries
-├── helper-tools/         Python & shell scripts
-├── dev_notes/            Design notes & analysis
-├── AIcoder-thinkings/    AI agent memory
-└── memory.x              Linker script
+├── src/                    Firmware source (RTIC app, drivers, shell)
+├── spike-hub-api/          Shared MonitorApi crate
+├── examples/hub-ram-demos/ RAM demo binaries
+│   └── xtask/              Demo build/upload/debug CLI
+├── xtask/                  Firmware build/flash CLI
+├── helper-tools/           Python & shell scripts
+├── dev_notes/              Design notes & analysis
+└── memory.x                Linker script
 ```
+
+| Directory | README | Description |
+| --- | --- | --- |
+| `src/` | — | RTIC firmware: [shell](REFERENCE_MANUAL.md#31-source-tree), [sandbox](REFERENCE_MANUAL.md#5-safety--sandbox), [DWT](REFERENCE_MANUAL.md#36-dwt-self-hosted-watchpoints), [GDB RSP](REFERENCE_MANUAL.md#37-gdb-rsp-stub) |
+| `spike-hub-api/` | [README](spike-hub-api/README.md) | MonitorApi callback table ([§3.3](REFERENCE_MANUAL.md#33-monitorapi--callback-table)) |
+| `examples/hub-ram-demos/` | [README](examples/hub-ram-demos/README.md) | RAM demo binaries — [writing demos](examples/hub-ram-demos/README.md#4-writing-a-new-demo), [available demos](examples/hub-ram-demos/README.md#3-available-demos) |
+| `examples/hub-ram-demos/xtask/` | [README](examples/hub-ram-demos/xtask/README.md) | Demo CLI — build, upload, debug pipeline |
+| `xtask/` | [README](xtask/README.md) | Firmware CLI — build, flash, connect, status |
+| `helper-tools/` | [README](helper-tools/README.md) | Python scripts — [upload](helper-tools/README.md#core-tools), [test suite](helper-tools/README.md#tests), [debug pipeline](helper-tools/README.md#core-tools) |
+| `dev_notes/` | [README](dev_notes/README.md) | Design notes — [sensor](dev_notes/sensor-fixes.md), [motor](dev_notes/motor-position-controller.md), [GDB](dev_notes/gdb-debugging.md), [LUMP](dev_notes/pybricks-lump-protocol-reference.md) |
 
 ---
 

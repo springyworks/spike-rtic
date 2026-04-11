@@ -1,5 +1,10 @@
 # Pybricks Low-Speed Motor Driving Analysis
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 ## Summary
 Pybricks handles low-speed motor control through a sophisticated **piece-wise affine (PWA) feedback controller** that reduces proportional gain (Kp) at low speeds and small position errors to prevent deadband/stiction issues. The system uses **12 kHz PWM** with **H-bridge fast decay** (conventional PWM mode).
 
@@ -10,7 +15,7 @@ Pybricks handles low-speed motor control through a sophisticated **piece-wise af
 ### Motor PWM Frequency
 **12 kHz** for motors (reduced from 1.2 kHz for noise reduction)
 
-**File:** [lib/pbio/platform/move_hub/platform.c](lib/pbio/platform/move_hub/platform.c#L240-L275)
+**File:** [lib/pbio/platform/move_hub/platform.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/platform/move_hub/platform.c#L240-L275)
 ```c
 // Motor drivers (ports A, B, C, D)
 {
@@ -29,7 +34,7 @@ Pybricks handles low-speed motor control through a sophisticated **piece-wise af
 ### PWM Mode
 **PWM Mode 1 (0x6 in STM32 CCMR register)** = Standard non-inverted PWM output
 
-**File:** [lib/pbio/drv/pwm/pwm_stm32_tim.c](lib/pbio/drv/pwm/pwm_stm32_tim.c#L61-L108)
+**File:** [lib/pbio/drv/pwm/pwm_stm32_tim.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/drv/pwm/pwm_stm32_tim.c#L61-L108)
 ```c
 ccmr1 |= (0x6 << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
 // 0x6 = PWM mode 1 (output low when counter < CCR, high when counter >= CCR)
@@ -38,7 +43,7 @@ ccmr1 |= (0x6 << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
 ### H-Bridge Control
 **Type:** Standard H-bridge with PWM via one FET, logic high on opposite FET = **Fast Decay**
 
-**File:** [lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c](lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c#L53-L68)
+**File:** [lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c#L53-L68)
 ```c
 static void pbdrv_motor_driver_run_fwd(const pbdrv_motor_driver_hbridge_pwm_platform_data_t *data, 
                                         int16_t duty_cycle) {
@@ -65,7 +70,7 @@ Pybricks reduces the proportional feedback gain at:
 - **Low command speeds** (below threshold)
 - **Small position errors** (below threshold)
 
-**File:** [lib/pbio/src/control.c](lib/pbio/src/control.c#L170-L220)
+**File:** [lib/pbio/src/control.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/control.c#L170-L220)
 ```c
 static int32_t pbio_control_get_pid_kp(const pbio_control_settings_t *settings, 
                                         int32_t position_error, 
@@ -111,7 +116,7 @@ static int32_t pbio_control_get_pid_kp(const pbio_control_settings_t *settings,
 
 ### Control Settings Parameters
 
-**File:** [lib/pbio/src/servo.c](lib/pbio/src/servo.c#L260-L300)
+**File:** [lib/pbio/src/servo.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/servo.c#L260-L300)
 ```c
 srv->control.settings = (pbio_control_settings_t) {
     .pid_kp_low_pct = 50,                        // Use 50% of normal Kp at low speeds
@@ -131,7 +136,7 @@ srv->control.settings = (pbio_control_settings_t) {
 
 ### Motor-Specific Low-Speed Thresholds
 
-**File:** [lib/pbio/src/motor/servo_settings.c](lib/pbio/src/motor/servo_settings.c#L214-L330)
+**File:** [lib/pbio/src/motor/servo_settings.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/motor/servo_settings.c#L214-L330)
 
 | Motor Type | `pid_kp_low_speed_threshold` (deg/s) | Notes |
 |---|---|---|
@@ -170,7 +175,7 @@ Instead, the system relies on:
 3. **Feedforward torque** from observer model prediction
 4. **Gradual PWA gain reduction** that prevents oscillation
 
-**File:** [lib/pbio/src/servo.c](lib/pbio/src/servo.c#L260-L290)
+**File:** [lib/pbio/src/servo.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/servo.c#L260-L290)
 ```c
 // Ki accumulates position error with restrictions
 .pid_ki = nominal_torque / precision_profile / 2,
@@ -190,7 +195,7 @@ int32_t total_torque = feedback_torque + feedforward_torque;
 ### Integral Deadzone
 In the **8-degree deadzone** around the target, the integrator doesn't accumulate error growth:
 
-**File:** [lib/pbio/src/integrator.c](lib/pbio/src/integrator.c#L180-L230)
+**File:** [lib/pbio/src/integrator.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/integrator.c#L180-L230)
 ```c
 int32_t pbio_position_integrator_update(pbio_position_integrator_t *itg, 
                                          int32_t position_error, 
@@ -250,7 +255,7 @@ int32_t pbio_position_integrator_update(pbio_position_integrator_t *itg,
 
 ## 6. CONTROL LOOP TIMING
 
-**File:** [lib/pbio/src/motor_process.c](lib/pbio/src/motor_process.c)
+**File:** [lib/pbio/src/motor_process.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/motor_process.c)
 ```c
 static pbio_error_t pbio_motor_process_thread(pbio_os_state_t *state, void *context) {
     static pbio_os_timer_t timer;
@@ -279,10 +284,10 @@ static pbio_error_t pbio_motor_process_thread(pbio_os_state_t *state, void *cont
 
 | File | Purpose |
 |---|---|
-| [lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c](lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c) | H-bridge PWM duty cycle setting |
-| [lib/pbio/src/control.c](lib/pbio/src/control.c) | PID controller with adaptive low-speed Kp |
-| [lib/pbio/src/servo.c](lib/pbio/src/servo.c#L260-L300) | Servo control settings initialization |
-| [lib/pbio/src/integrator.c](lib/pbio/src/integrator.c) | Anti-windup deadzone logic |
-| [lib/pbio/src/motor/servo_settings.c](lib/pbio/src/motor/servo_settings.c) | Motor-specific parameters table |
-| [lib/pbio/drv/pwm/pwm_stm32_tim.c](lib/pbio/drv/pwm/pwm_stm32_tim.c) | PWM timer configuration (12 kHz) |
-| [lib/pbio/platform/move_hub/platform.c](lib/pbio/platform/move_hub/platform.c) | Platform-specific PWM setup |
+| [lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/drv/motor_driver/motor_driver_hbridge_pwm.c) | H-bridge PWM duty cycle setting |
+| [lib/pbio/src/control.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/control.c) | PID controller with adaptive low-speed Kp |
+| [lib/pbio/src/servo.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/servo.c#L260-L300) | Servo control settings initialization |
+| [lib/pbio/src/integrator.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/integrator.c) | Anti-windup deadzone logic |
+| [lib/pbio/src/motor/servo_settings.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/src/motor/servo_settings.c) | Motor-specific parameters table |
+| [lib/pbio/drv/pwm/pwm_stm32_tim.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/drv/pwm/pwm_stm32_tim.c) | PWM timer configuration (12 kHz) |
+| [lib/pbio/platform/move_hub/platform.c](https://github.com/pybricks/pybricks-micropython/blob/master/lib/pbio/platform/move_hub/platform.c) | Platform-specific PWM setup |

@@ -1,5 +1,10 @@
 # Stack Corruption, Guard Bands, and the Limits of SoC Reliability
 
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
+
 Technical analysis of stack overflow risks in the SPIKE RTIC firmware,
 Rust's async/await stackless advantage, MPU-based guard bands,
 and why general-purpose SoCs are unsuitable for safety-critical devices.

@@ -1,5 +1,9 @@
 # demo-xtask — SPIKE Hub RAM Demo Manager
 
+[← Main README](../../../README.md) · [User Manual](../../../USER_MANUAL.md) · [Reference Manual](../../../REFERENCE_MANUAL.md) · [API Reference](../../../spike-hub-api/README.md) · [RAM Demos](../README.md) · [Helper Tools](../../../helper-tools/README.md) · [Dev Notes](../../../dev_notes/)
+
+---
+
 Build, upload, debug, and manage RAM demo binaries for the SPIKE hub.
 Handles serial port detection, COBS upload, GDB RSP mode entry, and
 automatic port-conflict resolution.
@@ -44,7 +48,7 @@ cargo demo free-port        # kill processes blocking the hub serial port
   recovery sequence adapts.
 - **Port detection priority:** Udev symlinks → sysfs interface scan →
   serialport crate VID:PID → brute-force. See
-  [dev_notes/port-detection.md](../../dev_notes/port-detection.md).
+  [dev_notes/port-detection.md](../../../dev_notes/port-detection.md).
 
 ## The `debug` Pipeline
 

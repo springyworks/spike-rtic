@@ -1,4 +1,4 @@
-# SPIKE-rtic  Hub — Reference Manual
+# SPIKE-rtic Hub — Reference Manual
 
 [← Main README](README.md) · [User Manual](USER_MANUAL.md) · [API Reference](spike-hub-api/README.md) · [RAM Demos](examples/hub-ram-demos/README.md) · [Helper Tools](helper-tools/README.md) · [Dev Notes](dev_notes/)
 
@@ -13,33 +13,33 @@ For getting started, shell commands, and how-to guides, see [USER\_MANUAL.md](US
 
 ## Contents
 
-- [SPIKE-rtic  Hub — Reference Manual](#spike-rtic--hub--reference-manual)
-  - [Contents](#contents)
-  - [1. Hardware](#1-hardware)
-    - [1.1 Microcontroller \& Memory](#11-microcontroller--memory)
-    - [1.2 Peripherals](#12-peripherals)
-    - [1.3 External SPI Flash (32 MB)](#13-external-spi-flash-32-mb)
-  - [2. Memory Map](#2-memory-map)
-    - [2.1 Internal Flash (1 MB)](#21-internal-flash-1-mb)
-    - [2.2 SRAM (320 KB)](#22-sram-320-kb)
-    - [2.3 External SPI Flash (32 MB)](#23-external-spi-flash-32-mb)
-  - [3. Architecture](#3-architecture)
-    - [3.1 Source Tree](#31-source-tree)
-    - [3.2 RTIC Conventions](#32-rtic-conventions)
-    - [3.3 MonitorApi — Callback Table](#33-monitorapi--callback-table)
-    - [3.4 Trace Buffer](#34-trace-buffer)
-    - [3.5 Abort Mechanism](#35-abort-mechanism)
-    - [3.6 DWT Self-Hosted Watchpoints](#36-dwt-self-hosted-watchpoints)
-    - [3.7 GDB RSP Stub](#37-gdb-rsp-stub)
-  - [4. Design Philosophy](#4-design-philosophy)
-    - [4.1 Teletype Heritage](#41-teletype-heritage)
-    - [4.2 COBS Binary Upload](#42-cobs-binary-upload)
-    - [4.3 Demon Heritage](#43-demon-heritage)
-    - [4.4 MCP-Assisted Development](#44-mcp-assisted-development)
-  - [5. Safety \& Sandbox](#5-safety--sandbox)
-  - [6. Performance Notes](#6-performance-notes)
-  - [7. Achievement Status](#7-achievement-status)
-  - [8. Code Provenance](#8-code-provenance)
+*   [SPIKE-rtic Hub — Reference Manual](#spike-rtic--hub--reference-manual)
+    *   [Contents](#contents)
+    *   [1\. Hardware](#1-hardware)
+        *   [1.1 Microcontroller & Memory](#11-microcontroller--memory)
+        *   [1.2 Peripherals](#12-peripherals)
+        *   [1.3 External SPI Flash (32 MB)](#13-external-spi-flash-32-mb)
+    *   [2\. Memory Map](#2-memory-map)
+        *   [2.1 Internal Flash (1 MB)](#21-internal-flash-1-mb)
+        *   [2.2 SRAM (320 KB)](#22-sram-320-kb)
+        *   [2.3 External SPI Flash (32 MB)](#23-external-spi-flash-32-mb)
+    *   [3\. Architecture](#3-architecture)
+        *   [3.1 Source Tree](#31-source-tree)
+        *   [3.2 RTIC Conventions](#32-rtic-conventions)
+        *   [3.3 MonitorApi — Callback Table](#33-monitorapi--callback-table)
+        *   [3.4 Trace Buffer](#34-trace-buffer)
+        *   [3.5 Abort Mechanism](#35-abort-mechanism)
+        *   [3.6 DWT Self-Hosted Watchpoints](#36-dwt-self-hosted-watchpoints)
+        *   [3.7 GDB RSP Stub](#37-gdb-rsp-stub)
+    *   [4\. Design Philosophy](#4-design-philosophy)
+        *   [4.1 Teletype Heritage](#41-teletype-heritage)
+        *   [4.2 COBS Binary Upload](#42-cobs-binary-upload)
+        *   [4.3 Demon Heritage](#43-demon-heritage)
+        *   [4.4 MCP-Assisted Development](#44-mcp-assisted-development)
+    *   [5\. Safety & Sandbox](#5-safety--sandbox)
+    *   [6\. Performance Notes](#6-performance-notes)
+    *   [7\. Achievement Status](#7-achievement-status)
+    *   [8\. Code Provenance](#8-code-provenance)
 
 ---
 
@@ -155,6 +155,11 @@ Accessed via `spiflash` shell commands or the `ext_flash` module.
 
 ## 3\. Architecture
 
+> **Architecture diagram:** [doc/architecture.drawio](doc/architecture.drawio) — open in [draw.io](https://app.diagrams.net/) or the VS Code Draw.io extension.  
+> Shows all layers from hardware through RTIC tasks, drivers, middleware, MonitorApi, sandbox, to user demo apps (`go` vs `go!`).
+
+![SPIKE-RTIC Architecture](doc/spike-rtic.svg)
+
 ### 3.1 Source Tree
 
 ```
@@ -250,9 +255,9 @@ Current version: `**API_VERSION = 12**` (26 fields, 104 bytes on 32-bit ARM).
 | 24 | `wait_event` | `fn(mask, timeout_ms) → u32` | 22 | v11 |
 | 25 | `read_input` | `fn(buf, len) → u32` | 23 | v12 |
 
-**Event flags** for `wait_event` mask:
-`EVT_SENSOR` (1<<0), `EVT_BUTTON` (1<<1), `EVT_MOTOR` (1<<2),
-`EVT_TIMEOUT` (1<<3), `EVT_INPUT` (1<<4).
+**Event flags** for `wait_event` mask:  
+`EVT_SENSOR` (1\<\<0), `EVT_BUTTON` (1\<\<1), `EVT_MOTOR` (1\<\<2),  
+`EVT_TIMEOUT` (1\<\<3), `EVT_INPUT` (1\<\<4).
 
 **Sandboxed** (`go`): demo runs unprivileged with MPU; API calls go  
 through SVC traps. **Privileged** (`go!`): direct function pointers,  
@@ -307,8 +312,8 @@ SWD debugger required.
 *   The DWT has 4 hardware comparators at `0xE000_1000` base
 *   Each comparator can match on data read, data write, data read/write,  
     or instruction address (PC match)
-*   When a match occurs, the **DebugMonitor** exception (priority 0xF0)
-    fires — lower priority than all firmware tasks, so USB, shell, and
+*   When a match occurs, the **DebugMonitor** exception (priority 0xF0)  
+    fires — lower priority than all firmware tasks, so USB, shell, and  
     watchdog keep running while the demo is halted
 *   The handler scans all 4 MATCHED bits, records hit counts and the  
     stacked PC in atomic variables, then returns
@@ -319,8 +324,8 @@ SWD debugger required.
 2.  Enable TRCENA in DEMCR (`0xE000_EDFC`)
 3.  Enable MON\_EN in DEMCR (DebugMonitor exception)
 4.  Enable DWT cycle counter
-5.  Set DebugMonitor priority to `0xF0` (lowest HW priority, same as
-    RTIC pri 1) via SHPR3 at `0xE000_ED20` bits [7:0]
+5.  Set DebugMonitor priority to `0xF0` (lowest HW priority, same as  
+    RTIC pri 1) via SHPR3 at `0xE000_ED20` bits \[7:0\]
 
 **Priority mapping:**
 
@@ -331,7 +336,7 @@ SWD debugger required.
 | 1 | 0xF0 | run\_demo, test\_all |
 | — | 0xF0 | **DebugMonitor** |
 
-This ensures all firmware (pri 2+) preempts DebugMonitor — the watchdog
+This ensures all firmware (pri 2+) preempts DebugMonitor — the watchdog  
 heartbeat feeds while the demo is halted in the WFE loop.
 
 **Key registers:**
@@ -363,7 +368,7 @@ stub — "Demon mode" runs on Hub — for remote debugging over USB CDC serial.
 **Architecture:**
 
 *   `GdbStub` struct manages the RSP state machine
-*   `enter()` switches shell into RSP mode (all bytes routed to RSP parser),
+*   `enter()` switches shell into RSP mode (all bytes routed to RSP parser),  
     sets `GDB_ACTIVE` flag, pends DebugMonitor to halt the target
 *   `feed(data, resp_buf) -> usize` processes incoming bytes, builds responses
 *   `dispatch()` handles complete RSP packets
@@ -372,45 +377,45 @@ stub — "Demon mode" runs on Hub — for remote debugging over USB CDC serial.
 
 **DebugMonitor trampoline:**
 
-The DebugMonitor handler is a naked function that must preserve
+The DebugMonitor handler is a naked function that must preserve  
 EXC\_RETURN (held in LR) across the `bl` call to the Rust handler:
 
-```asm
+```
 push {r4-r11, lr}      // save callee-saved regs + EXC_RETURN
 bl   debug_monitor_handler
 pop  {r4-r11, lr}      // restore EXC_RETURN into LR
 bx   lr                 // exception return
 ```
 
-The handler saves the stacked register frame (r0-r12, sp, lr, pc, xpsr)
-into static atomics, then enters a WFE halt loop.  GDB reads the saved
-registers via `g` packets and resumes via `c` (which calls
+The handler saves the stacked register frame (r0-r12, sp, lr, pc, xpsr)  
+into static atomics, then enters a WFE halt loop. GDB reads the saved  
+registers via `g` packets and resumes via `c` (which calls  
 `dwt::resume_target()` to clear `TARGET_HALTED` + `sev`).
 
 **GDB\_ACTIVE guard:**
 
 *   `GDB_ACTIVE` atomic flag prevents orphaned halts when GDB disconnects
 *   Set on `enter()`, cleared on detach (`D`/`k`) or auto-detach (USB disconnect)
-*   DebugMonitor checks `GDB_ACTIVE` before WFE — if zero, clears
+*   DebugMonitor checks `GDB_ACTIVE` before WFE — if zero, clears  
     MON\_STEP/MON\_PEND and returns immediately
-*   Auto-detach triggers: RSP `D`/`k` packets, USB bus disconnect,
-    triple Ctrl-C.  **Not** DTR drop (breaks pipeline→GDB handoff).
+*   Auto-detach triggers: RSP `D`/`k` packets, USB bus disconnect,  
+    triple Ctrl-C. **Not** DTR drop (breaks pipeline→GDB handoff).
 
 **Register layout (ARM 26-register format):**
 
 GDB's "arm" architecture expects 26 registers in the `g` response  
 (336 hex chars):
 
-| Registers  | Count | Hex chars | Content                     |
-| ---------- | ----- | --------- | --------------------------- |
-| R0–R12     | 13    | 104       | from stacked exception frame|
-| SP (R13)   | 1     | 8         | PSP (demo stack)            |
-| LR (R14)   | 1     | 8         | stacked LR                  |
-| PC (R15)   | 1     | 8         | stacked PC (faulting addr)  |
-| f0–f7      | 8     | 192       | zeros (no FPA)              |
-| fps        | 1     | 8         | zero                        |
-| cpsr       | 1     | 8         | stacked xPSR               |
-| **Total**  | **26**| **336**   |                             |
+| Registers | Count | Hex chars | Content |
+| --- | --- | --- | --- |
+| R0–R12 | 13 | 104 | from stacked exception frame |
+| SP (R13) | 1 | 8 | PSP (demo stack) |
+| LR (R14) | 1 | 8 | stacked LR |
+| PC (R15) | 1 | 8 | stacked PC (faulting addr) |
+| f0–f7 | 8 | 192 | zeros (no FPA) |
+| fps | 1 | 8 | zero |
+| cpsr | 1 | 8 | stacked xPSR |
+| **Total** | **26** | **336** |   |
 
 **Memory/register access:**
 
@@ -431,7 +436,7 @@ GDB's "arm" architecture expects 26 registers in the `g` response
 
 *   `fpb.rs` provides hardware instruction breakpoints (6 comparators)
 *   FPBv1 covers code region 0x0000\_0000–0x1FFF\_FFFF (Flash only)
-*   For SRAM2 demos (0x2004\_xxxx), FPB cannot match — use DWT
+*   For SRAM2 demos (0x2004\_xxxx), FPB cannot match — use DWT  
     watchpoints or software breakpoints instead
 
 **Capabilities reported by** `**qSupported**`**:**
@@ -444,7 +449,7 @@ PacketSize=256;hwbreak-;swbreak-
 
 **Connecting with GDB:**
 
-```bash
+```
 # Debug pipeline — upload, go, gdb, release port (recommended):
 python3 $PROJECT_ROOT/helper-tools/debug_pipeline.py \
     $PROJECT_ROOT/examples/hub-ram-demos/target/spike-usr_bins/gdb_exercise.bin
@@ -456,7 +461,7 @@ gdb-multiarch \
     -ex "target remote /dev/ttyACM0"
 ```
 
-See [dev\_notes/gdb-debugging.md](dev_notes/gdb-debugging.md) for the
+See [dev\_notes/gdb-debugging.md](dev_notes/gdb-debugging.md) for the  
 full architecture, trampoline design, and lessons learned.
 
 ---
@@ -577,7 +582,7 @@ with no Rust destructors and no access to kernel resources.
 | Motor H-bridge PWM driver (all 6 ports) | Done |
 | MonitorApi callbacks for RAM demos (v5) | Done |
 | MonitorApi v10: IMU, port\_read, sensor\_light, hub\_led | Done |
-| MonitorApi v11: wait\_event — event-driven blocking (EVT\_*) | Done |
+| MonitorApi v11: wait\_event — event-driven blocking (EVT\_\*) | Done |
 | MonitorApi v12: read\_input, EVT\_INPUT — host→demo text channel | Done |
 | IMU I2C bus-reset recovery (9 SCL clocks + dual-address probe) | Done |
 | LPF2 LUMP sensor driver (async ISR, 115200 baud) | Done |

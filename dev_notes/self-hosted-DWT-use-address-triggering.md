@@ -1,3 +1,7 @@
+[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
+
+---
+
 The short answer is **yes**, you can absolutely set these triggers directly from your firmware without needing an external JTAG or SWD debugger.
 
 Since you are using a Cortex-M4, you aren't just limited to external tools. The hardware responsible for this is the **Data Watchpoint and Trace (DWT)** unit. Because the DWT is memory-mapped, your firmware can write to its registers just like it writes to a GPIO or UART register.

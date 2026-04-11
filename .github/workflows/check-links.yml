@@ -1,0 +1,56 @@
+name: Check Markdown Links
+
+on:
+  push:
+    paths:
+      - '**.md'
+  pull_request:
+    paths:
+      - '**.md'
+  workflow_dispatch:
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check local markdown links
+        run: |
+          python3 << 'PYEOF'
+          import re, os, sys, urllib.parse
+
+          broken = []
+          for root, dirs, files in os.walk('.'):
+              # skip build artifacts, git internals, AI memory
+              skip = any(s in root for s in ['.git/', 'target/', 'AIcoder'])
+              if skip:
+                  continue
+              for f in files:
+                  if not f.endswith('.md'):
+                      continue
+                  filepath = os.path.join(root, f)
+                  with open(filepath) as fh:
+                      for lineno, line in enumerate(fh, 1):
+                          for m in re.finditer(r'\[([^\]]*)\]\(([^)]+)\)', line):
+                              text, target = m.group(1), m.group(2)
+                              if target.startswith(('http', '#', 'mailto')):
+                                  continue
+                              path_part = target.split('#')[0]
+                              if not path_part:
+                                  continue
+                              path_part = urllib.parse.unquote(path_part)
+                              resolved = os.path.normpath(
+                                  os.path.join(os.path.dirname(filepath), path_part)
+                              )
+                              if not os.path.exists(resolved):
+                                  broken.append(f'{filepath}:{lineno}: [{text}]({target}) -> {resolved}')
+
+          if broken:
+              print(f'::error::{len(broken)} broken link(s) found:\n')
+              for b in broken:
+                  print(f'  {b}')
+              sys.exit(1)
+          else:
+              print('All local markdown links OK.')
+          PYEOF

@@ -219,9 +219,9 @@ pub unsafe fn init_charger_iset() {
     // PA0 → AF2 (TIM5_CH1).
     // GPIOA clock is already enabled (power_hold does this).
     // MODER[1:0] = 0b10 (alternate function)
-    reg_modify(pins::GPIOA, pins::MODER, 3 << 0, 2 << 0);
+    reg_modify(pins::GPIOA, pins::MODER, 3, 2);
     // AFRL[3:0] = 2 (AF2)
-    reg_modify(pins::GPIOA, pins::AFRL, 0xF << 0, 2 << 0);
+    reg_modify(pins::GPIOA, pins::AFRL, 0xF, 2);
 
     // Configure TIM5:
     //   PSC = 9  → 96 MHz / (9+1) = 9.6 MHz tick.
@@ -314,7 +314,7 @@ fn decode_rlad(value: u32, levels: &[u32; 8]) -> u8 {
 /// of VCC.  Returns `true` if NTC is within that window.
 pub fn ntc_ok() -> bool {
     let raw = crate::read_adc(8);
-    raw >= pins::NTC_LOW_THRESHOLD && raw <= pins::NTC_HIGH_THRESHOLD
+    (pins::NTC_LOW_THRESHOLD..=pins::NTC_HIGH_THRESHOLD).contains(&raw)
 }
 
 /// Assert PA13 HIGH to keep the hub powered on.
@@ -440,7 +440,7 @@ fn charging_idle() -> ! {
         crate::watchdog::feed();
 
         // Charger tick every 4 iterations (500 ms at 125 ms loop)
-        if tick % 4 == 0 {
+        if tick.is_multiple_of(4) {
             chg_state.tick();
         }
 
@@ -478,7 +478,7 @@ fn charging_idle() -> ! {
             // Smart overlay: brief dim cyan pulse on STATUS_TOP every 5 s
             // to show the hub is alive even though "off".
             // At 125 ms/tick, 40 ticks = 5 s.
-            if tick % 40 == 0 {
+            if tick.is_multiple_of(40) {
                 led_matrix::set_status_rgb(pins::STATUS_TOP, 0, 0x1000, 0x1000);
             } else if tick % 40 == 1 {
                 led_matrix::set_status_rgb(pins::STATUS_TOP, 0, 0, 0);

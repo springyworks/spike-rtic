@@ -365,7 +365,7 @@ pub fn demo_sensor_read(buf: &mut [u8]) -> usize {
     // Keepalive every 3rd call, but respect mode-switch suppress window.
     let ctr = DEMO_KA_CTR.load(Ordering::Relaxed).wrapping_add(1);
     DEMO_KA_CTR.store(ctr, Ordering::Relaxed);
-    if ctr % 3 == 0 && DEMO_KA_SUPPRESS.load(Ordering::Relaxed) == 0 {
+    if ctr.is_multiple_of(3) && DEMO_KA_SUPPRESS.load(Ordering::Relaxed) == 0 {
         unsafe { lump_keepalive(PORTS[idx as usize]); }
         crate::trace::record(crate::trace::TAG_KEEPALIVE, 1, idx as u16);
     }
@@ -503,7 +503,7 @@ pub fn demo_motor_maintain() {
     lump_poll_data(state);
     let ctr = DEMO_MOTOR_KA_CTR.load(Ordering::Relaxed).wrapping_add(1);
     DEMO_MOTOR_KA_CTR.store(ctr, Ordering::Relaxed);
-    if ctr % 5 == 0 {
+    if ctr.is_multiple_of(5) {
         unsafe { lump_keepalive(PORTS[idx as usize]); }
     }
 }
@@ -1135,8 +1135,8 @@ pub fn msg_size(header: u8) -> usize {
 pub fn check_msg(buf: &[u8], len: usize) -> bool {
     if len < 2 { return false; }
     let mut chk: u8 = 0xFF;
-    for i in 0..len - 1 {
-        chk ^= buf[i];
+    for &b in &buf[..len - 1] {
+        chk ^= b;
     }
     chk == buf[len - 1]
 }
@@ -1249,7 +1249,7 @@ pub fn lump_poll_data(state: &mut SensorState) -> bool {
         }
 
         let msize = msg_size(hdr_byte);
-        if msize < 2 || msize > MAX_MSG {
+        if !(2..=MAX_MSG).contains(&msize) {
             // Invalid header — skip this byte and try to resync
             state.diag_bad_size = state.diag_bad_size.wrapping_add(1);
             rx_skip(port, 1);
@@ -1262,6 +1262,7 @@ pub fn lump_poll_data(state: &mut SensorState) -> bool {
         }
 
         // Peek all bytes into local buffer (still not consumed)
+        #[allow(clippy::needless_range_loop)] // index needed for rx_peek_at
         for i in 0..msize {
             buf[i] = rx_peek_at(port, i);
         }
@@ -1286,7 +1287,7 @@ pub fn lump_poll_data(state: &mut SensorState) -> bool {
         if msg_type == LUMP_MSG_TYPE_DATA {
             // Actual mode = ext_mode * 8 + header_mode (like Pybricks rx_ext_mode)
             let hdr_mode = hdr_byte & LUMP_MSG_CMD_MASK;
-            let actual_mode = (state.ext_mode as u8).wrapping_mul(8).wrapping_add(hdr_mode);
+            let actual_mode = state.ext_mode.wrapping_mul(8).wrapping_add(hdr_mode);
             let data_len = msize - 2;
             state.diag_data_msgs = state.diag_data_msgs.wrapping_add(1);
 

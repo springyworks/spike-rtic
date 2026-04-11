@@ -20,7 +20,7 @@
 //!   1. Enter DFU: hold center button during power-on, or `dfu` cmd,
 //!      or hold left button while running.
 //!   2. `dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D firmware.bin`
-//!   (Hub uses LEGO DFU bootloader at VID:PID 0x0694:0x0011)
+//!      (Hub uses LEGO DFU bootloader at VID:PID 0x0694:0x0011)
 //!
 //! ## Connect to the shell
 //!   picocom /dev/ttyACM0   (or screen, minicom, PuTTY, etc.)
@@ -50,6 +50,7 @@ mod dwt;
 mod fpb;
 mod gdb_rsp;
 mod motor;
+mod periph;
 mod pins;
 mod power;
 mod ram_test;
@@ -109,13 +110,13 @@ unsafe fn init_button_adc() {
     reg_modify(pins::GPIOA, pins::MODER, (3 << 2) | (3 << 6),
                                           (3 << 2) | (3 << 6));
     // PB0 (ch8)  — battery NTC thermistor
-    reg_modify(pins::GPIOB, pins::MODER, 3 << 0, 3 << 0);
+    reg_modify(pins::GPIOB, pins::MODER, 3, 3);
     // PC0 (ch10) — battery current
     // PC1 (ch11) — battery voltage
     // PC4 (ch14) — center button + /CHG resistor ladder
     reg_modify(pins::GPIOC, pins::MODER,
-        (3 << 0) | (3 << 2) | (3 << 8),
-        (3 << 0) | (3 << 2) | (3 << 8));
+        3 | (3 << 2) | (3 << 8),
+        3 | (3 << 2) | (3 << 8));
 
     // Single conversion, 480-cycle sample time for all analog channels.
     // SMPR2 covers ch0–ch9 (3 bits each).
@@ -154,6 +155,7 @@ pub fn read_buttons() -> u8 {
     }
 
     let v = read_adc(1);
+    #[allow(clippy::if_same_then_else)] // ADC thresholds: adjacent ranges map to same button
     if v <= pins::LR_LEVELS[0] {
         if v > pins::LR_LEVELS[1] {
             // BT only — ignore
@@ -279,7 +281,7 @@ mod app {
         // ── Hardware watchdog (~5 s timeout) ──
         // Resets the hub automatically if firmware locks up.
         // Fed by heartbeat (500 ms) and SVC delay (20 ms chunks).
-        unsafe { watchdog::start() };
+        watchdog::start();
 
         // ── USB CDC serial ──
         let usb_bus = unsafe { usb_serial::init() };
@@ -337,7 +339,21 @@ mod app {
                     // Debug mode: privileged Thread mode, no MPU.
                     // DebugMonitor can halt this for GDB breakpoints.
                     let api = user_app_io::build_api();
-                    let result = unsafe { sandbox::run_debug(addr, &api) };
+
+                    // setjmp: save recovery context so `kill` can longjmp
+                    // back here, terminating the demo immediately.
+                    // Without this, abort_longjmp_if_requested is a no-op
+                    // (JMPBUF_VALID is false) and cooperative kill has no
+                    // effect — the demo loops forever ignoring EVT_TIMEOUT.
+                    let jumped = unsafe { user_app_io::abort_setjmp(user_app_io::jmpbuf_ptr()) };
+                    let result = if jumped != 0 {
+                        0xDEAD_0001 // killed
+                    } else {
+                        user_app_io::set_jmpbuf_valid(true);
+                        let r = unsafe { sandbox::run_debug(addr, &api) };
+                        user_app_io::set_jmpbuf_valid(false);
+                        r
+                    };
                     sandbox::complete_sandbox(result, false);
                 } else {
                     let api = sandbox::build_sandboxed_api();
@@ -617,7 +633,7 @@ mod app {
             }
 
             // ── Low battery warning / shutdown ──
-            if !power::vbus_present() && ticks % 20 == 0 {
+            if !power::vbus_present() && ticks.is_multiple_of(20) {
                 let mv = power::battery_mv();
                 if mv < power::BATTERY_CRITICAL_MV && mv > 1000 {
                     // Below 5800 mV (2.9V/cell) — shut down to protect the cells.
@@ -750,7 +766,7 @@ mod app {
         let distance = (target - init_pos).abs();
         let approach_ms = (distance as i64 * 1000 / 200).min(15000) as i32;
         let total_ms = approach_ms + settle_hold_ms + 5000; // extra time for nudges
-        let total_iters = ((total_ms as u32) + 19) / 20;
+        let total_iters = (total_ms as u32).div_ceil(20);
 
         cx.shared.shell.lock(|shell| {
             let mut t = [0u8; 96];
@@ -1029,11 +1045,10 @@ mod app {
             }
 
             // Port E → sensor_poll2
-            if !task_state::is_active(task_state::SENSOR_POLL2) {
-                if sensor::port_status(4) != sensor::Status::Data {
+            if !task_state::is_active(task_state::SENSOR_POLL2)
+                && sensor::port_status(4) != sensor::Status::Data {
                     sensor_poll2::spawn(4).ok();
                 }
-            }
 
             // Check every 3s — gives handshake time (~4s)
             Mono::delay(3000.millis()).await;
@@ -1072,7 +1087,7 @@ mod app {
 
             sensor::lump_poll_data(&mut local_state);
 
-            if tick % 5 == 0 {
+            if tick.is_multiple_of(5) {
                 local_state.data_received = false;
                 unsafe { sensor::lump_keepalive(sp) };
             }
@@ -1109,7 +1124,7 @@ mod app {
 
             sensor::lump_poll_data(&mut local_state);
 
-            if tick % 5 == 0 {
+            if tick.is_multiple_of(5) {
                 local_state.data_received = false;
                 unsafe { sensor::lump_keepalive(sp) };
             }
@@ -1132,11 +1147,10 @@ mod app {
             }
 
             // Port B → motor_poll2
-            if !task_state::is_active(task_state::MOTOR_POLL2) {
-                if sensor::port_status(1) != sensor::Status::Data {
+            if !task_state::is_active(task_state::MOTOR_POLL2)
+                && sensor::port_status(1) != sensor::Status::Data {
                     motor_poll2::spawn(1).ok();
                 }
-            }
 
             Mono::delay(3000.millis()).await;
         }
@@ -1344,7 +1358,7 @@ mod app {
                     let chk = rx_byte!(50);
                     if let (Some(type_id), Some(checksum)) = (id, chk) {
                         let expected = 0xFF ^ sensor::TYPE_HEADER ^ type_id;
-                        if checksum == expected && type_id >= 29 && type_id <= 101 {
+                        if checksum == expected && (29..=101).contains(&type_id) {
                             state.type_id = type_id;
                             state.debug_step = 30;
                             break;
@@ -1387,6 +1401,7 @@ mod app {
                     if msize > 1 && msize <= sensor::MAX_MSG {
                         buf[0] = hdr;
                         let mut got = 0usize;
+                        #[allow(clippy::needless_range_loop)]
                         for i in 1..msize {
                             if let Some(b) = rx_byte!(50) {
                                 buf[i] = b;
@@ -1508,7 +1523,7 @@ mod app {
             let got_data = sensor::lump_poll_data(&mut local_state);
 
             // Every 5th tick (~100 ms): keepalive + watchdog check
-            if tick % 5 == 0 {
+            if tick.is_multiple_of(5) {
                 if local_state.data_received || got_data {
                     // Sensor is alive — reset watchdog
                     watchdog_misses = 0;
@@ -1587,7 +1602,7 @@ mod app {
 
                 let got_data = sensor::lump_poll_data(&mut local_state);
 
-                if tick % 5 == 0 {
+                if tick.is_multiple_of(5) {
                     if local_state.data_received || got_data {
                         watchdog_misses = 0;
                         local_state.data_received = false;

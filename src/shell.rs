@@ -679,7 +679,7 @@ impl Shell {
                     self.push(b"=== WATCHDOG RESET (previous boot) ===\r\n");
 
                     // Uptime
-                    let secs = rec.uptime as u32 / 2; // heartbeat is 500ms
+                    let secs = rec.uptime / 2; // heartbeat is 500ms
                     let mut tmp = [0u8; 80];
                     let mut w = BufWriter::new(&mut tmp);
                     let _ = write!(w, "Last heartbeat: tick {} (~{}s after boot)\r\n",
@@ -855,8 +855,8 @@ impl Shell {
                 }
             }
             "px" => {
-                let idx = parts.next().and_then(|s| parse_u32(s));
-                let bri = parts.next().and_then(|s| parse_u32(s));
+                let idx = parts.next().and_then(parse_u32);
+                let bri = parts.next().and_then(parse_u32);
                 match (idx, bri) {
                     (Some(i), Some(b)) if i < 25 && b <= 100 => {
                         led_matrix::set_pixel(i as usize, b as u16);
@@ -934,9 +934,9 @@ impl Shell {
                 self.push(b" ticks\r\n");
             }
             "beep" => {
-                let freq = parts.next().and_then(|s| parse_u32(s)).unwrap_or(1000);
-                let dur = parts.next().and_then(|s| parse_u32(s)).unwrap_or(200);
-                let freq = if freq < 100 { 100 } else if freq > 10000 { 10000 } else { freq };
+                let freq = parts.next().and_then(parse_u32).unwrap_or(1000);
+                let dur = parts.next().and_then(parse_u32).unwrap_or(200);
+                let freq = freq.clamp(100, 10000);
                 let dur = if dur > 5000 { 5000 } else { dur };
                 // Non-blocking: USB ISR will spawn the async beep_tone task
                 self.beep_request = Some((freq, dur));
@@ -990,7 +990,7 @@ impl Shell {
                 self.push(w.written());
             }
             "upload" => {
-                let expected = parts.next().and_then(|s| parse_u32(s)).unwrap_or(0);
+                let expected = parts.next().and_then(parse_u32).unwrap_or(0);
                 if expected as usize > upload::UPLOAD_BUF_SIZE {
                     self.push(b"ERR: too large (max 64K)\r\n");
                     return;
@@ -1002,7 +1002,6 @@ impl Shell {
                 self.push(w.written());
                 led_matrix::show_pattern(&patterns::USB_ICON, 40);
                 unsafe { led_matrix::update() };
-                return;
             }
             "bininfo" => {
                 let addr = upload::upload_buf_addr();
@@ -1033,11 +1032,11 @@ impl Shell {
                     return;
                 }
 
-                let addr = parts.next().and_then(|s| parse_num(s))
+                let addr = parts.next().and_then(parse_num)
                     .unwrap_or(upload::upload_buf_addr());
 
                 // Sanity: must be in SRAM range
-                if addr < 0x2000_0000 || addr >= 0x2005_0000 {
+                if !(0x2000_0000..0x2005_0000).contains(&addr) {
                     self.push(b"ERR: addr outside SRAM (0x20000000..0x20050000)\r\n");
                     return;
                 }
@@ -1065,10 +1064,10 @@ impl Shell {
                     return;
                 }
 
-                let addr = parts.next().and_then(|s| parse_num(s))
+                let addr = parts.next().and_then(parse_num)
                     .unwrap_or(upload::upload_buf_addr());
 
-                if addr < 0x2004_0000 || addr >= 0x2005_0000 {
+                if !(0x2004_0000..0x2005_0000).contains(&addr) {
                     self.push(b"ERR: addr outside SRAM2 (0x20040000..0x20050000)\r\n");
                     return;
                 }
@@ -1186,12 +1185,12 @@ impl Shell {
 
             "md" => {
                 // Memory dump: md <addr> [count]  (count = number of 32-bit words, default 16)
-                let addr = parts.next().and_then(|s| parse_num(s));
-                let count = parts.next().and_then(|s| parse_num(s)).unwrap_or(16);
+                let addr = parts.next().and_then(parse_num);
+                let count = parts.next().and_then(parse_num).unwrap_or(16);
                 match addr {
                     Some(a) if a & 3 == 0 => {
-                        let a = a as u32;
                         let n = if count > 256 { 256 } else { count };
+                        #[allow(clippy::needless_range_loop)]
                         for i in 0..n {
                             let offset = i * 4;
                             if i % 4 == 0 {
@@ -1218,8 +1217,8 @@ impl Shell {
             }
             "mw" => {
                 // Memory write: mw <addr> <value>
-                let addr = parts.next().and_then(|s| parse_num(s));
-                let val = parts.next().and_then(|s| parse_num(s));
+                let addr = parts.next().and_then(parse_num);
+                let val = parts.next().and_then(parse_num);
                 match (addr, val) {
                     (Some(a), Some(v)) if a & 3 == 0 => {
                         unsafe {
@@ -1343,7 +1342,7 @@ impl Shell {
                 let mut tmp = [0u8; 56];
 
                 let rcc = 0x4002_3800u32;
-                let cr = unsafe { core::ptr::read_volatile((rcc + 0x00) as *const u32) };
+                let cr = unsafe { core::ptr::read_volatile(rcc as *const u32) };
                 let mut w = BufWriter::new(&mut tmp);
                 let _ = write!(w, "CR:      0x{:08X}\r\n", cr);
                 self.push(w.written());
@@ -1370,6 +1369,7 @@ impl Shell {
                 self.push(w.written());
 
                 // Compute frequencies
+                #[allow(clippy::if_same_then_else)] // HSI=HSE=16 MHz on this hub
                 let src_freq: u32 = if pllcfgr & (1 << 22) != 0 { 16_000_000 } else { 16_000_000 };
                 let vco_in = src_freq / pllm;
                 let vco_out = vco_in * plln;
@@ -1442,7 +1442,7 @@ impl Shell {
                     if let Some(base) = base {
                         let mut tmp = [0u8; 48];
 
-                        let moder = unsafe { core::ptr::read_volatile((base + 0x00) as *const u32) };
+                        let moder = unsafe { core::ptr::read_volatile(base as *const u32) };
                         let port_ch = port_name.as_bytes()[0].to_ascii_uppercase() as char;
                         let mut w = BufWriter::new(&mut tmp);
                         let _ = write!(w, "GPIO{} MODER:   0x{:08X}\r\n", port_ch, moder);
@@ -1540,7 +1540,7 @@ impl Shell {
             }
             "adc" => {
                 // Raw ADC channel read: adc <ch>
-                if let Some(ch) = parts.next().and_then(|s| parse_u32(s)) {
+                if let Some(ch) = parts.next().and_then(parse_u32) {
                     if ch <= 15 {
                         let val = crate::read_adc(ch);
                         let mut tmp = [0u8; 40];
@@ -1603,8 +1603,8 @@ impl Shell {
             }
             "crc" => {
                 // CRC-32 of memory range: crc <addr> <len_bytes>
-                let addr = parts.next().and_then(|s| parse_num(s));
-                let len = parts.next().and_then(|s| parse_num(s));
+                let addr = parts.next().and_then(parse_num);
+                let len = parts.next().and_then(parse_num);
                 match (addr, len) {
                     (Some(a), Some(n)) => {
                         if n > 1024 * 1024 {
@@ -1625,9 +1625,9 @@ impl Shell {
             }
             "fill" => {
                 // Fill memory with word pattern: fill <addr> <count_words> <value>
-                let addr = parts.next().and_then(|s| parse_num(s));
-                let count = parts.next().and_then(|s| parse_num(s));
-                let val = parts.next().and_then(|s| parse_num(s));
+                let addr = parts.next().and_then(parse_num);
+                let count = parts.next().and_then(parse_num);
+                let val = parts.next().and_then(parse_num);
                 match (addr, count, val) {
                     (Some(a), Some(n), Some(v)) if a & 3 == 0 => {
                         if n > 256 * 1024 {
@@ -1665,7 +1665,7 @@ impl Shell {
                                 let num_str = if negative { &duty_str[1..] } else { duty_str };
                                 if let Some(v) = parse_u32(num_str) {
                                     let duty = if negative { -(v as i32) } else { v as i32 };
-                                    if duty >= -100 && duty <= 100 {
+                                    if (-100..=100).contains(&duty) {
                                         motor::set(idx as u32, duty);
                                         let mut tmp = [0u8; 64];
                                         let mut w = BufWriter::new(&mut tmp);
@@ -1980,7 +1980,7 @@ impl Shell {
                                 st.type_name(), st.type_id, st.mode);
                             if st.is_ultrasonic() && st.data_len >= 2 {
                                 let d = st.distance_mm();
-                                if d < 0 || d >= 2000 {
+                                if !(0..2000).contains(&d) {
                                     let _ = write!(w, " dist=---");
                                 } else {
                                     let _ = write!(w, " dist={}mm", d);
@@ -2024,6 +2024,7 @@ impl Shell {
                                 let _ = write!(w2, "Got {} bytes:", n);
                                 self.push(w2.written());
                                 // Print hex bytes in groups of 16
+                                #[allow(clippy::needless_range_loop)]
                                 for i in 0..n {
                                     if i % 16 == 0 {
                                         self.push(b"\r\n ");
@@ -2215,7 +2216,7 @@ impl Shell {
                         task_state::pause_auto_detect();
                     }
                     Some("mode") => {
-                        if let Some(m) = parts.next().and_then(|s| parse_u32(s)) {
+                        if let Some(m) = parts.next().and_then(parse_u32) {
                             if m <= 9 {
                                 let mut tmp = [0u8; 40];
                                 let mut w = BufWriter::new(&mut tmp);
@@ -2301,7 +2302,7 @@ impl Shell {
                                 let _ = write!(w2, "  H={} S={} V={}\r\n", h, s, v);
                             } else if sensor.is_ultrasonic() && sensor.data_len >= 2 {
                                 let d = sensor.distance_mm();
-                                if d < 0 || d >= 2000 {
+                                if !(0..2000).contains(&d) {
                                     let _ = write!(w2, "  dist=out-of-range (raw={})\r\n", d);
                                 } else {
                                     let _ = write!(w2, "  dist={}mm\r\n", d);
@@ -2350,16 +2351,15 @@ impl Shell {
                         } else {
                             self.push(b"Usage: sensor <a-f>\r\n");
                         }
-                        return;
                     }
                 }
             }
 
             "light" => {
                 // Set color sensor LED brightness: light <r> <g> <b> (0-100 each)
-                let r = parts.next().and_then(|s| parse_u32(s)).unwrap_or(0);
-                let g = parts.next().and_then(|s| parse_u32(s)).unwrap_or(0);
-                let b = parts.next().and_then(|s| parse_u32(s)).unwrap_or(0);
+                let r = parts.next().and_then(parse_u32).unwrap_or(0);
+                let g = parts.next().and_then(parse_u32).unwrap_or(0);
+                let b = parts.next().and_then(parse_u32).unwrap_or(0);
                 let r = r.min(100) as u8;
                 let g = g.min(100) as u8;
                 let b = b.min(100) as u8;
@@ -2528,7 +2528,7 @@ impl Shell {
                 const SRAM1_END: u32 = 0x2004_0000;
                 let bss_end = if ebss > SRAM1_END { SRAM1_END } else { ebss };
                 let bss_size = bss_end - sbss;
-                let stack_free = if sp > bss_end { sp - bss_end } else { 0 };
+                let stack_free = sp.saturating_sub(bss_end);
 
                 let mut tmp = [0u8; 64];
 
@@ -2712,14 +2712,15 @@ impl Shell {
                         }
                     }
                     Some("read") => {
-                        let addr = parts.next().and_then(|s| parse_num(s));
-                        let count = parts.next().and_then(|s| parse_num(s)).unwrap_or(64);
+                        let addr = parts.next().and_then(parse_num);
+                        let count = parts.next().and_then(parse_num).unwrap_or(64);
                         match addr {
                             Some(a) if a < ext_flash::FLASH_SIZE => {
                                 let n = core::cmp::min(count, 256) as usize;
                                 let mut buf = [0u8; 256];
                                 ext_flash::read(a, &mut buf[..n]);
                                 let mut tmp = [0u8; 16];
+                                #[allow(clippy::needless_range_loop)]
                                 for i in 0..n {
                                     if i % 16 == 0 {
                                         let mut w = BufWriter::new(&mut tmp);
@@ -2739,7 +2740,7 @@ impl Shell {
                         }
                     }
                     Some("erase") => {
-                        let addr = parts.next().and_then(|s| parse_num(s));
+                        let addr = parts.next().and_then(parse_num);
                         match addr {
                             Some(a) if a < ext_flash::FLASH_SIZE => {
                                 let mut tmp = [0u8; 48];
@@ -2754,8 +2755,8 @@ impl Shell {
                         }
                     }
                     Some("write") => {
-                        let addr = parts.next().and_then(|s| parse_num(s));
-                        let val = parts.next().and_then(|s| parse_num(s));
+                        let addr = parts.next().and_then(parse_num);
+                        let val = parts.next().and_then(parse_num);
                         match (addr, val) {
                             (Some(a), Some(v)) if a < ext_flash::FLASH_SIZE => {
                                 let bytes = [
@@ -2775,8 +2776,8 @@ impl Shell {
                         // Store upload buffer contents to SPI flash.
                         // Usage: spiflash store <flash_addr> [size]
                         // If size is omitted, uses last_upload_len.
-                        let addr = parts.next().and_then(|s| parse_num(s));
-                        let size = parts.next().and_then(|s| parse_num(s))
+                        let addr = parts.next().and_then(parse_num);
+                        let size = parts.next().and_then(parse_num)
                             .unwrap_or(self.last_upload_len as u32);
                         match addr {
                             Some(a) if a < ext_flash::FLASH_SIZE && size > 0 => {
@@ -2790,8 +2791,7 @@ impl Shell {
                                     buf[4], buf[5], buf[6], buf[7]);
                                 self.push(w.written());
                                 // Erase enough sectors to fit
-                                let sectors = (sz + ext_flash::SECTOR_SIZE as usize - 1)
-                                    / ext_flash::SECTOR_SIZE as usize;
+                                let sectors = sz.div_ceil(ext_flash::SECTOR_SIZE as usize);
                                 let mut w = BufWriter::new(&mut tmp);
                                 let _ = write!(w, "Erasing {} sectors @ 0x{:08X}...\r\n", sectors, a);
                                 self.push(w.written());
@@ -2807,7 +2807,7 @@ impl Shell {
                                 self.push(w.written());
                                 let mut w = BufWriter::new(&mut tmp);
                                 let _ = write!(w, "Writing {} bytes ({} pages)...\r\n",
-                                    sz, (sz + 255) / 256);
+                                    sz, sz.div_ceil(256));
                                 self.push(w.written());
                                 ext_flash::write(a, &buf[..sz]);
                                 // Verify first 8 bytes
@@ -2825,8 +2825,8 @@ impl Shell {
                     }
                     Some("load") => {
                         // Load from SPI flash to upload buffer.
-                        let addr = parts.next().and_then(|s| parse_num(s));
-                        let size = parts.next().and_then(|s| parse_num(s));
+                        let addr = parts.next().and_then(parse_num);
+                        let size = parts.next().and_then(parse_num);
                         match (addr, size) {
                             (Some(a), Some(sz)) if a < ext_flash::FLASH_SIZE && sz > 0 => {
                                 let n = core::cmp::min(sz as usize, upload::UPLOAD_BUF_SIZE);
@@ -2847,8 +2847,8 @@ impl Shell {
                     }
                     Some("run") => {
                         // Load from SPI flash and immediately execute (sandboxed).
-                        let addr = parts.next().and_then(|s| parse_num(s));
-                        let size = parts.next().and_then(|s| parse_num(s));
+                        let addr = parts.next().and_then(parse_num);
+                        let size = parts.next().and_then(parse_num);
                         match (addr, size) {
                             (Some(a), Some(sz)) if a < ext_flash::FLASH_SIZE && sz > 0 => {
                                 if user_app_io::is_running() {
@@ -2887,6 +2887,7 @@ impl Shell {
                                 // Hex line
                                 let mut w = BufWriter::new(&mut tmp);
                                 let _ = write!(w, "  [{}] 0x{:08X}: ", slot, base);
+                                #[allow(clippy::needless_range_loop)]
                                 for i in 0..32 {
                                     let _ = write!(w, "{:02X}", peek[i]);
                                     if i == 3 || i == 7 || i == 15 { let _ = write!(w, " "); }
@@ -2999,8 +3000,7 @@ impl Shell {
                             return;
                         }
                         let total = sz + 8; // header + binary
-                        let sectors = (total + ext_flash::SECTOR_SIZE as usize - 1)
-                            / ext_flash::SECTOR_SIZE as usize;
+                        let sectors = total.div_ceil(ext_flash::SECTOR_SIZE as usize);
                         let mut tmp = [0u8; 80];
                         let mut w = BufWriter::new(&mut tmp);
                         let _ = write!(w, "Installing {} B (erase {} sectors)...\r\n", sz, sectors);
@@ -3055,7 +3055,7 @@ impl Shell {
                     "set" => {
                         // dwt set <n> <addr> [r|w|rw|pc]
                         let n = parts.next().and_then(parse_u32);
-                        let addr = parts.next().and_then(|s| parse_hex(s));
+                        let addr = parts.next().and_then(parse_hex);
                         let func_str = parts.next().unwrap_or("rw");
                         match (n, addr) {
                             (Some(n), Some(addr)) if n < 4 => {

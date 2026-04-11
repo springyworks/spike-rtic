@@ -1,54 +1,58 @@
 # hub-ram-demos — RAM Demo Binaries for SPIKE Prime Hub
 
-[← Main README](../../README.md) · [User Manual](../../USER_MANUAL.md) · [Reference Manual](../../REFERENCE_MANUAL.md) · [API Reference](../../spike-hub-api/README.md) · [Helper Tools](../../helper-tools/README.md) · [Dev Notes](../../dev_notes/)
+[← Main README](../../README.md) · [User Manual](../../USER_MANUAL.md) · [Reference Manual](../../REFERENCE_MANUAL.md) · [API Reference](../../spike-hub-api/README.md) · [Helper Tools](../../helper-tools/README.md)
 
 ---
 
-Small `no_std` Rust programs that run from SRAM2 on the LEGO SPIKE Prime  
-hub. Uploaded via COBS over USB CDC, executed via the firmware's `go`  
+Small `no_std` Rust programs that run from SRAM2 on the LEGO SPIKE Prime
+hub.  Uploaded via COBS over USB CDC, executed via the firmware's `go`
 command — no reflash required.
 
-> This is the **Demon resident monitor** pattern from the 1980s ARM world:  
-> the host pushes a raw binary into target RAM, the monitor hands off  
+> This is the **Demon resident monitor** pattern from the 1980s ARM world:
+> the host pushes a raw binary into target RAM, the monitor hands off
 > control, and the demo talks back through a C-ABI callback table.
+
+<!-- TOC -->
 
 ## Contents
 
-*   [1\. Quick Start](#1-quick-start)
-    *   [1.1 Build](#11-build)
-    *   [1.2 Upload & Run](#12-upload--run)
-*   [2\. How It Works](#2-how-it-works)
-    *   [2.1 Execution Flow](#21-execution-flow)
-    *   [2.2 MonitorApi Callback Table](#22-monitorapi-callback-table)
-    *   [2.3 Sandboxed vs. Privileged](#23-sandboxed-vs-privileged)
-    *   [2.4 Using the Trace Buffer](#24-using-the-trace-buffer)
-*   [3\. Available Demos](#3-available-demos)
-*   [4\. Writing a New Demo](#4-writing-a-new-demo)
-    *   [4.1 Minimal Template](#41-minimal-template)
-    *   [4.2 Build & Extract Binary](#42-build--extract-binary)
-    *   [4.3 Adding to Cargo.toml](#43-adding-to-cargotoml)
-*   [5\. Linker Script](#5-linker-script)
-*   [6\. Important Notes](#6-important-notes)
-    *   [6.1 Execution Context](#61-execution-context)
-    *   [6.2 Recovery from Crashes](#62-recovery-from-crashes)
-*   [7\. Dependencies](#7-dependencies)
+- [1. Quick Start](#1-quick-start)
+  - [1.1 Build](#11-build)
+  - [1.2 Upload & Run](#12-upload--run)
+- [2. How It Works](#2-how-it-works)
+  - [2.1 Execution Flow](#21-execution-flow)
+  - [2.2 MonitorApi Callback Table](#22-monitorapi-callback-table)
+  - [2.3 Sandboxed vs. Privileged](#23-sandboxed-vs-privileged)
+  - [2.4 Using the Trace Buffer](#24-using-the-trace-buffer)
+- [3. Available Demos](#3-available-demos)
+- [4. Writing a New Demo](#4-writing-a-new-demo)
+  - [4.1 Minimal Template](#41-minimal-template)
+  - [4.2 Build & Extract Binary](#42-build--extract-binary)
+  - [4.3 Adding to Cargo.toml](#43-adding-to-cargotoml)
+- [5. Linker Script](#5-linker-script)
+- [6. Important Notes](#6-important-notes)
+  - [6.1 Execution Context](#61-execution-context)
+  - [6.2 Recovery from Crashes](#62-recovery-from-crashes)
+- [7. Dependencies](#7-dependencies)
+
+<!-- /TOC -->
 
 ---
 
-## 1\. Quick Start
+## 1. Quick Start
 
 ### 1.1 Build
 
-```
+```bash
 # From anywhere — $PROJECT_ROOT is auto-set by .bashrc on every cd
 cd $PROJECT_ROOT/examples/hub-ram-demos
 cargo build --release
 ```
 
-Extract a raw binary for upload (examples live under `examples/`,  
+Extract a raw binary for upload (examples live under `examples/`,
 Cargo uses underscores in filenames):
 
-```
+```bash
 arm-none-eabi-objcopy -O binary \
     target/thumbv7em-none-eabihf/release/examples/dual_motors \
     target/spike-usr_bins/dual_motors.bin
@@ -56,14 +60,14 @@ arm-none-eabi-objcopy -O binary \
 
 ### 1.2 Upload & Run
 
-Power on the hub and connect a terminal to `/dev/ttyACM0` (or  
-`/dev/ttyACM1`). You get the `spike>` prompt.
+Power on the hub and connect a terminal to `/dev/ttyACM0` (or
+`/dev/ttyACM1`).  You get the `spike>` prompt.
 
-```
+```bash
 # From the host:
 python3 $PROJECT_ROOT/helper-tools/upload_demo.py dual_motors.bin
-# Or with the controller:
-python3 $PROJECT_ROOT/helper-tools/spike_hub_controller.py upload dual_motors.bin
+# Or with hub.py:
+python3 $PROJECT_ROOT/helper-tools/hub.py run dual_motors.bin
 
 # In the hub shell:
 spike> bininfo
@@ -81,12 +85,12 @@ OK 412 CRC=0xABCD1234
 spike> go
 ```
 
-For DFU flashing of the firmware itself, see the  
-[User Manual §5](../../USER_MANUAL.md#5-dfu--recovery).
+For DFU flashing of the firmware itself, see the
+[main README §7](../../README.md#7-dfu--recovery).
 
 ---
 
-## 2\. How It Works
+## 2. How It Works
 
 ### 2.1 Execution Flow
 
@@ -100,38 +104,38 @@ For DFU flashing of the firmware itself, see the
   spike>                        → shell resumes
 ```
 
-The firmware stays running. The demo is a guest that borrows the  
-monitor's I/O, LEDs, ADC, motors, sensors, and speaker through the  
+The firmware stays running.  The demo is a guest that borrows the
+monitor's I/O, LEDs, ADC, motors, sensors, and speaker through the
 `MonitorApi` callback struct.
 
-**Process management:** the shell stays fully interactive while a demo  
-runs (like a Unix background job). You can type `uptime`, `ps`, or  
-any shell command during execution. Kill a running demo with:
+**Process management:** the shell stays fully interactive while a demo
+runs (like a Unix background job).  You can type `uptime`, `ps`, or
+any shell command during execution.  Kill a running demo with:
 
 | Method | Signal | Behavior |
-| --- | --- | --- |
-| `**kill**` or `**kill -15**` | SIGTERM | Cooperative: demo exits at next API call |
-| `**kill -2**` | SIGINT | Same as SIGTERM |
-| `**kill -9**` | SIGKILL | Immediate: force-kill + brake motors + stop sound |
+| ------ | ------ | -------- |
+| **`kill`** or **`kill -15`** | SIGTERM | Cooperative: demo exits at next API call |
+| **`kill -2`** | SIGINT | Same as SIGTERM |
+| **`kill -9`** | SIGKILL | Immediate: force-kill + brake motors + stop sound |
 | **Ctrl-C** | SIGTERM | Sets ABORT flag |
 | **Ring button** hold 1–6 s | SIGKILL | Hard-kill via `force_kill_sandbox` |
 | **Right button** | SIGKILL + relaunch | Kill running demo, then launch from SPI flash |
 
-All kill paths terminate the demo (exit code `0xDEAD0001`), brake  
-motors, and stop sound. **Demos never need exit-on-button logic** —  
+All kill paths terminate the demo (exit code `0xDEAD0001`), brake
+motors, and stop sound.  **Demos never need exit-on-button logic** —
 the firmware handles all lifecycle management.
 
-See the [User Manual §3](../../USER_MANUAL.md#3-process-management)  
+See the [main README §5.5](../../README.md#55-process-management)
 for ring button zone details and the re-run workflow.
 
 ### 2.2 MonitorApi Callback Table
 
-The `MonitorApi` is a `#[repr(C)]` struct defined in the shared  
-[`spike-hub-api`](../../spike-hub-api/) crate. Current version: **10**  
-(24 fields, 96 bytes on 32-bit ARM).
+The `MonitorApi` is a `#[repr(C)]` struct defined in the shared
+[`spike-hub-api`](../../spike-hub-api/) crate.  Current version: **12**
+(26 fields, 104 bytes on 32-bit ARM).
 
 | # | Field | Signature | SVC | Since |
-| --- | --- | --- | --- | --- |
+|---|-------|-----------|-----|-------|
 | 0 | `version` | `u32` | — | v1 |
 | 1 | `context` | `*mut u8` | — | v1 |
 | 2 | `write_fn` | `fn(ctx, ptr, len)` | 0 | v1 |
@@ -156,70 +160,117 @@ The `MonitorApi` is a `#[repr(C)]` struct defined in the shared
 | 21 | `imu_init` | `fn() → u32` | 19 | v10 |
 | 22 | `imu_read` | `fn(buf, len) → u32` | 20 | v10 |
 | 23 | `set_hub_led` | `fn(r, g, b)` | 21 | v10 |
+| 24 | `wait_event` | `fn(mask, timeout_ms) → u32` | 22 | v11 |
+| 25 | `read_input` | `fn(buf, len) → u32` | 23 | v12 |
 
-See the [Reference Manual §3.3](../../REFERENCE_MANUAL.md#33-monitorapi--callback-table) for details.
+See the [main README §5.3](../../README.md#53-monitorapi--callback-table) for details.
 
 ### 2.3 Sandboxed vs. Privileged
 
-| Command | Mode | MPU | API mechanism | Use case |
-| --- | --- | --- | --- | --- |
-| `go` | Sandboxed | On | SVC trap → callbacks | User apps |
-| `go!` | Privileged | Off | Direct fn pointers | Firmware dev/debug |
+| Command | Mode        | MPU  | API mechanism       | Use case           |
+| ------- | ----------- | ---- | ------------------- | ------------------ |
+| `go`    | Sandboxed   | On   | SVC trap → callbacks| User apps          |
+| `go!`   | Privileged  | Off  | Direct fn pointers  | Firmware dev/debug |
 
-`go` runs the demo in **unprivileged Thread mode** with MPU protection.  
-API calls go through SVC traps so the demo can only access SRAM2 and  
-the callback table. A crash triggers a MemManage fault → clean recovery.
+`go` runs the demo in **unprivileged Thread mode** with MPU protection.
+API calls go through SVC traps so the demo can only access SRAM2 and
+the callback table.  A crash triggers a MemManage fault → clean recovery.
 
-`go!` runs the demo **privileged** with full memory access. Useful for  
-testing firmware-level code, but a crash may require a hard reset  
-(lift the battery — see [§6.2](#62-recovery-from-crashes) and the  
-[User Manual §5.3](../../USER_MANUAL.md#53-hard-reset-battery-lift)).
+`go!` runs the demo **privileged** with full memory access.  Useful for
+testing firmware-level code, but a crash may require a hard reset
+(lift the battery — see [§6.2](#62-recovery-from-crashes) and the
+[main README §7.3](../../README.md#73-hard-reset-battery-lift)).
 
 ### 2.4 Using the Trace Buffer
 
-Demos can record lightweight trace entries into the firmware's 2 KB  
+Demos can record lightweight trace entries into the firmware's 2 KB
 ring buffer using `trace_record`:
 
-```
+```rust
 // Record a user trace (tag=0x80)
 (api.trace_record)(0x80, my_val, my_arg);
 ```
 
-This writes 8 bytes atomically — much faster than `write_fn` for  
-high-frequency instrumentation. Dump traces later with `trace` in  
-the shell. Enable/disable with `trace on` / `trace off`.
+This writes 8 bytes atomically — much faster than `write_fn` for
+high-frequency instrumentation.  Dump traces later with `trace` in
+the shell.  Enable/disable with `trace on` / `trace off`.
 
-See the [Reference Manual §3.4](../../REFERENCE_MANUAL.md#34-trace-buffer) for  
+See the [main README §5.4](../../README.md#54-trace-buffer) for
 tag definitions and usage patterns.
 
 ---
 
-## 3\. Available Demos
+## 3. Available Demos
 
-| Demo | Source | API | What It Does |
-| --- | --- | --- | --- |
-| `spike-demo` | `src/main.rs` | v2+ | Motor ramp/coast/reverse/brake on port B |
-| `dual-motors` | `examples/dual_motors.rs` | v2+ | Choreographed A+B motor dance with LED status |
-| `motor-buttons` | `examples/motor_buttons.rs` | v2+ | Button-controlled dual motors (interactive) |
-| `color-chaos` | `examples/color_chaos.rs` | v4+ | RGBI sensor → derivative-driven motors + RTTY FSK |
-| `color-seek` | `examples/color_seek.rs` | v3+ | Fast RGBI color classification, motor seek |
-| `color-seeker` | `examples/color_seeker.rs` | v7+ | Rotational color scanner: motor\_goto steps + classify |
-| `motor-goto` | `examples/motor_goto.rs` | v7+ | Closed-loop position control: goto 90°/0°/360°/0° |
-| `motor-sensor-test` | `examples/motor_sensor_test.rs` | v7+ | Motor + sensor integration test |
-| `pwm-diag` | `examples/pwm_diag.rs` | v2+ | PWM diagnostics on motor ports |
-| `reg-dump` | `examples/reg_dump.rs` | v2+ | Hardware register inspection |
-| `sensor-dump` | `examples/sensor_dump.rs` | v3+ | Raw RGBI hex dump + ring buffer diagnostics |
+| Demo               | Source                           | API  | What It Does |
+| ------------------ | -------------------------------- | ---- | ------------ |
+| `spike-demo`       | `src/main.rs`                    | v2+  | Motor ramp/coast/reverse/brake on port B |
+| `dual-motors`      | `examples/dual_motors.rs`        | v2+  | Choreographed A+B motor dance with LED status |
+| `motor-buttons`    | `examples/motor_buttons.rs`      | v2+  | Button-controlled dual motors (interactive) |
+| `color-chaos`      | `examples/color_chaos.rs`        | v4+  | RGBI sensor → derivative-driven motors + RTTY FSK |
+| `color-seek`       | `examples/color_seek.rs`         | v3+  | Fast RGBI color classification, motor seek |
+| `color-seeker`     | `examples/color_seeker.rs`       | v7+  | Rotational color scanner: motor_goto steps + classify |
+| `motor-goto`       | `examples/motor_goto.rs`         | v7+  | Closed-loop position control: goto 90°/0°/360°/0° |
+| `motor-sensor-test`| `examples/motor_sensor_test.rs`  | v7+  | Motor + sensor integration test |
+| `gdb-exercise`     | `examples/gdb_exercise.rs`       | v2+  | GDB debug target: fibonacci, color classify, motor ramp, LED cross |
+| `gdb-simple`       | `examples/gdb_simple.rs`         | v2+  | Minimal GDB test: tight loop for breakpoint/step testing |
+| `pwm-diag`         | `examples/pwm_diag.rs`           | v2+  | PWM diagnostics on motor ports |
+| `reg-dump`         | `examples/reg_dump.rs`           | v2+  | Hardware register inspection |
+| `sensor-dump`      | `examples/sensor_dump.rs`        | v3+  | Raw RGBI hex dump + ring buffer diagnostics |
+| `event-driven`     | `examples/event_driven.rs`       | v12+ | Event-driven demo: IMU, thermal, buttons, host input (EVT_*) |
 
-**Default port layout:** motors on ports **A** and **B**, color sensor  
+**Default port layout:** motors on ports **A** and **B**, color sensor
 on port **F**.
+
+### Debugging a Demo with GDB or LLDB
+
+> **Status: alpha** — registers, memory, software breakpoints,
+> watchpoints, continue, step, halt, and detach all work with both
+> GDB and LLDB.
+
+The easiest path is **VS Code F5** — the xtask preLaunchTask handles
+build → upload → RSP entry automatically:
+
+1. Open the Run & Debug panel (Ctrl+Shift+D)
+2. Pick **"Debug demo (LLDB)"** or **"Debug demo (GDB)"**
+3. Enter the demo name (e.g. `gdb_simple`)
+4. Press F5 — xtask builds, uploads, enters RSP, and the debugger connects
+
+Quick-launch configs (no name prompt) exist for `gdb_simple` and `gdb_exercise`.
+
+**Manual (CLI):**
+
+```bash
+# Terminal 1: build + upload + enter RSP
+cd examples/hub-ram-demos/xtask
+cargo run -- debug gdb_simple
+
+# Terminal 2a: connect GDB
+gdb-multiarch \
+    ../target/thumbv7em-none-eabihf/release/examples/gdb_simple \
+    -ex "set serial baud 115200" \
+    -ex "target remote /tmp/spike-hub"
+
+# Terminal 2b: OR connect LLDB
+lldb \
+    -o "target create ../target/thumbv7em-none-eabihf/release/examples/gdb_simple" \
+    -o "process connect --plugin gdb-remote serial:///tmp/spike-hub?baud=115200"
+```
+
+The `.vscode/launch.json` and `.vscode/tasks.json` files are committed
+to the repo — clone and go.
+
+See [dev\_notes/gdb-debugging.md](../../dev_notes/gdb-debugging.md) for
+the full architecture and [USER\_MANUAL.md §2.8](../../USER_MANUAL.md#28-gdb-remote-debug)
+for GDB usage.
 
 ---
 
-## 4\. Writing a New Demo
+## 4. Writing a New Demo
 
 ### 4.1 Minimal Template
 
-```
+```rust
 #![no_std]
 #![no_main]
 
@@ -231,8 +282,8 @@ pub extern "C" fn _start(api: *const MonitorApi) -> u32 {
     let api = unsafe { &*api };
 
     // Check API version
-    if api.version < 7 {
-        api.print(b"ERR: need API v7+\r\n");
+    if api.version < 12 {
+        api.print(b"ERR: need API v12+\r\n");
         return 1;
     }
 
@@ -260,7 +311,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 
 ### 4.2 Build & Extract Binary
 
-```
+```bash
 cargo build --release --bin my-demo
 arm-none-eabi-objcopy -O binary \
     target/thumbv7em-none-eabihf/release/my-demo my-demo.bin
@@ -268,10 +319,10 @@ arm-none-eabi-objcopy -O binary \
 
 ### 4.3 Adding to Cargo.toml
 
-Add an `[[example]]` entry (demos in `examples/` are auto-detected)  
+Add an `[[example]]` entry (demos in `examples/` are auto-detected)
 or add a `[[bin]]` entry for demos in `src/bin/`:
 
-```
+```toml
 [[bin]]
 name = "my-demo"
 path = "src/bin/my_demo.rs"
@@ -281,9 +332,9 @@ bench = false
 
 ---
 
-## 5\. Linker Script
+## 5. Linker Script
 
-All demos link to **0x20040000** (SRAM2, 64 KB minus 16 bytes reserved  
+All demos link to **0x20040000** (SRAM2, 64 KB minus 16 bytes reserved
 for DFU magic at 0x2004FFF0):
 
 ```
@@ -299,49 +350,49 @@ SECTIONS {
 
 ---
 
-## 6\. Important Notes
+## 6. Important Notes
 
 ### 6.1 Execution Context
 
-*   The demo runs as an RTIC task at priority 1. The USB ISR (priority 2)  
-    continues draining output while the demo runs.
-*   **Shell stays interactive** — you can run any command (`ps`, `uptime`,  
-    `kill`, etc.) while a demo runs. The demo is a background job.
-*   **Kill/Ctrl-C/button abort** — the firmware can terminate any demo  
-    at any time. SIGTERM/SIGINT (`kill`, `kill -2`, Ctrl-C) set the ABORT  
-    flag checked by every MonitorApi callback. SIGKILL (`kill -9`, ring  
-    button hold 1–6 s, right button) uses `force_kill_sandbox` to hijack  
-    the exception return — kills even tight `loop {}` demos instantly.  
-    Demos don't need to poll for exit conditions.
-*   **No vector table** — exceptions and interrupts are handled by the  
-    firmware. The demo is a function call, not a full firmware.
-*   **Stack is shared** — the demo uses the monitor's stack. Avoid large  
-    stack allocations.
-*   The `go` command automatically sets bit 0 of the address (Thumb BLX  
-    requirement on Cortex-M).
-*   The last 16 bytes of SRAM2 (`0x2004FFF0`) are reserved for the DFU  
-    bootloader magic word. Don't use them.
+- The demo runs as an RTIC task at priority 1.  The USB ISR (priority 2)
+  continues draining output while the demo runs.
+- **Shell stays interactive** — you can run any command (`ps`, `uptime`,
+  `kill`, etc.) while a demo runs.  The demo is a background job.
+- **Kill/Ctrl-C/button abort** — the firmware can terminate any demo
+  at any time.  SIGTERM/SIGINT (`kill`, `kill -2`, Ctrl-C) set the ABORT
+  flag checked by every MonitorApi callback.  SIGKILL (`kill -9`, ring
+  button hold 1–6 s, right button) uses `force_kill_sandbox` to hijack
+  the exception return — kills even tight `loop {}` demos instantly.
+  Demos don't need to poll for exit conditions.
+- **No vector table** — exceptions and interrupts are handled by the
+  firmware.  The demo is a function call, not a full firmware.
+- **Stack is shared** — the demo uses the monitor's stack.  Avoid large
+  stack allocations.
+- The `go` command automatically sets bit 0 of the address (Thumb BLX
+  requirement on Cortex-M).
+- The last 16 bytes of SRAM2 (`0x2004FFF0`) are reserved for the DFU
+  bootloader magic word.  Don't use them.
 
 ### 6.2 Recovery from Crashes
 
 | Situation | Recovery |
-| --- | --- |
+| --------- | -------- |
 | Demo killed (`kill -15` / Ctrl-C) | ABORT flag → demo exits at next API call (exit `0xDEAD0001`) |
 | Demo force-killed (`kill -9` / ring button / right button) | `force_kill_sandbox` → immediate exit, motors braked |
 | Sandboxed demo crash (`go`) | MemManage fault → clean recovery, shell resumes automatically |
 | Privileged demo crash (`go!`) | May need `reset` or hard reset |
 | Hub completely stuck | Lift battery out for 1 second, re-insert |
 
-After lifting the battery, hold **center** to boot normally or  
-**center + left** for DFU mode. See the  
-[User Manual §5.3](../../USER_MANUAL.md#53-hard-reset-battery-lift) for details.
+After lifting the battery, hold **center** to boot normally or
+**center + left** for DFU mode.  See the
+[main README §7.3](../../README.md#73-hard-reset-battery-lift) for details.
 
 ---
 
-## 7\. Dependencies
+## 7. Dependencies
 
-*   [`spike-hub-api`](../../spike-hub-api/) crate — shared `MonitorApi`  
-    struct definition. Located at `../../spike-hub-api` relative to this  
-    directory.
-*   Rust nightly toolchain with `thumbv7em-none-eabihf` target.
-*   `arm-none-eabi-objcopy` (or `rust-objcopy`) for binary extraction.
+- [`spike-hub-api`](../../spike-hub-api/) crate — shared `MonitorApi`
+  struct definition.  Located at `../../spike-hub-api` relative to this
+  directory.
+- Rust nightly toolchain with `thumbv7em-none-eabihf` target.
+- `arm-none-eabi-objcopy` (or `rust-objcopy`) for binary extraction.

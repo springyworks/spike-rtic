@@ -1,10 +1,5 @@
 # How the hub handles both GDB and CodeLLDB
 
-[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
-
----
-
-
 **The hub doesn't know or care which client is talking to it.** It speaks one protocol: **GDB Remote Serial Protocol (RSP)**. That's it.
 
 ## The protocol stack

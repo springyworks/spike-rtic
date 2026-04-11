@@ -10,31 +10,38 @@
 //! If the firmware completely locks up (HardFault, infinite loop,
 //! corrupted stack), the IWDG fires and the hub reboots cleanly.
 
-const IWDG_KR:  *mut u32 = 0x4000_3000 as *mut u32;
-const IWDG_PR:  *mut u32 = 0x4000_3004 as *mut u32;
-const IWDG_RLR: *mut u32 = 0x4000_3008 as *mut u32;
-const IWDG_SR:  *const u32 = 0x4000_300C as *const u32;
+use crate::periph::{OncePeripheral, Iwdg};
+
+// ── Module-owned peripheral token (set once in start) ──
+static IWDG_P: OncePeripheral<Iwdg> = OncePeripheral::new();
+
+// ── IWDG register offsets ──
+const IWDG_KR:  u32 = 0x00;
+const IWDG_PR:  u32 = 0x04;
+const IWDG_RLR: u32 = 0x08;
+// const IWDG_SR:  u32 = 0x0C;  // unused
 
 /// Start the IWDG with ~5 second timeout.
 ///
-/// Must be called once during init.  After this, `feed()` must be
-/// called before the timeout expires or the MCU resets.
-///
-/// # Safety
-/// Writes to IWDG registers.  Must be called from privileged mode.
-pub unsafe fn start() {
+/// Takes exclusive ownership of the IWDG peripheral token.
+/// Must be called once during init.
+pub fn start() {
+    // Take exclusive ownership of IWDG
+    IWDG_P.set(Iwdg::take());
+    let iwdg = IWDG_P.get();
+
     // Start the watchdog — this also enables the LSI oscillator.
     // Default timeout is ~512 ms (prescaler /4, reload 0xFFF).
-    core::ptr::write_volatile(IWDG_KR, 0xCCCC);
+    iwdg.write(IWDG_KR, 0xCCCC);
 
     // Enable register access
-    core::ptr::write_volatile(IWDG_KR, 0x5555);
+    iwdg.write(IWDG_KR, 0x5555);
 
     // Prescaler /128: LSI ~32 KHz / 128 = 250 Hz
-    core::ptr::write_volatile(IWDG_PR, 0b101); // /128
+    iwdg.write(IWDG_PR, 0b101); // /128
 
     // Reload 1250: 1250 / 250 = 5.0 seconds
-    core::ptr::write_volatile(IWDG_RLR, 1250);
+    iwdg.write(IWDG_RLR, 1250);
 
     // Feed immediately — the new prescaler/reload values will take
     // effect within a few LSI cycles (well before first timeout).
@@ -47,9 +54,7 @@ pub unsafe fn start() {
 /// watchdog happy during normal operation and demo execution.
 #[inline(always)]
 pub fn feed() {
-    unsafe {
-        core::ptr::write_volatile(IWDG_KR, 0xAAAA);
-    }
+    IWDG_P.get().write(IWDG_KR, 0xAAAA);
 }
 
 // ── Reset source detection ──

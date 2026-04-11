@@ -342,6 +342,45 @@ fn ensure_shell_mode(serial: &mut Box<dyn SerialPort>) {
     }
 }
 
+/// Send a GDB detach ($D#44) on the dedicated GDB port (ttyACM1).
+///
+/// When a previous `debug` session left RSP active on the GDB port,
+/// the demo is halted at a breakpoint.  Detaching resumes the demo
+/// so cooperative `kill` (abort flag) can take effect.
+///
+/// Best-effort: if the GDB port can't be opened (not present, locked),
+/// we silently skip — single-CDC firmware or no prior debug session.
+fn detach_gdb_port() {
+    // Kill any stale socat bridge holding TCP port, even if the serial
+    // port disappeared (hub re-enumeration, USB disconnect, etc.)
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", &format!("socat.*TCP-LISTEN:{GDB_TCP_PORT}")])
+        .status();
+
+    let gdb_port = match find_gdb_port() {
+        Some(p) => p,
+        None => return, // no dedicated GDB port — single-CDC or not present
+    };
+    // Kill any socat/gdb still holding the GDB port
+    let gdb_users = find_port_users(&gdb_port);
+    if !gdb_users.is_empty() {
+        kill_port_users(&gdb_port);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    let mut gdb_serial = match serialport::new(&gdb_port, BAUD)
+        .timeout(Duration::from_millis(200))
+        .open()
+    {
+        Ok(s) => s,
+        Err(_) => return, // can't open — skip
+    };
+    let _ = gdb_serial.write_all(b"$D#44");
+    let _ = gdb_serial.flush();
+    std::thread::sleep(Duration::from_millis(300));
+    drop(gdb_serial);
+    eprintln!("  {GREEN}✓{RESET} Sent GDB detach on {CYAN}{gdb_port}{RESET}");
+}
+
 // ── Interactive mode ────────────────────────────────────────
 
 fn list_demos() -> Vec<String> {
@@ -481,12 +520,36 @@ fn cmd_debug(args: &[String]) {
     // 5. Probe hub state and get to shell mode
     ensure_shell_mode(&mut serial);
 
+    // 5b. Detach GDB on the dedicated GDB port (ttyACM1) if a previous
+    //     debug session left RSP active there.  ensure_shell_mode only
+    //     detaches on the shell port, but `debug`-mode RSP runs on the
+    //     GDB port (dual-CDC).  Without this, the demo stays halted at
+    //     a breakpoint and `kill` (cooperative SIGTERM) has no effect —
+    //     the demo isn't executing code to check the abort flag.
+    detach_gdb_port();
+
     // 6. Kill any running demo cooperatively (SIGTERM).
     // NEVER use "kill -9" here — force_kill_sandbox from the USB ISR
     // context leaves BASEPRI elevated, permanently blocking priority 2
     // tasks (heartbeat, sensor, USB) → watchdog reset after ~5 s.
     send_line(&mut serial, "kill");
-    drain_for(&mut serial, Duration::from_millis(500));
+    let kill_resp = read_until(&mut serial, "spike>", Duration::from_secs(3));
+    if kill_resp.contains("Abort requested") {
+        eprintln!("  {GREEN}✓{RESET} Kill accepted — waiting for demo exit...");
+        // Wait for the demo to actually terminate.  The firmware sends
+        // "=> <result>" followed by "spike>" when the demo exits.
+        let exit_resp = read_until(&mut serial, "spike>", Duration::from_secs(5));
+        if exit_resp.contains("=>") || exit_resp.contains("spike>") {
+            eprintln!("  {GREEN}✓{RESET} Demo exited");
+        } else {
+            eprintln!("  {YELLOW}Demo exit not confirmed (continuing anyway){RESET}");
+        }
+    } else if kill_resp.contains("No demo running") {
+        eprintln!("  {DIM}No demo was running{RESET}");
+    } else {
+        eprintln!("  {YELLOW}Kill response: {:?}{RESET}",
+            &kill_resp[..kill_resp.len().min(80)]);
+    }
 
     // 7. Upload
     let bin_data = fs::read(&bin_path).unwrap_or_else(|e| {
@@ -573,17 +636,22 @@ fn cmd_debug(args: &[String]) {
 ///   - Plants BKPT at demo entry (halt on first instruction)
 ///   - Enters RSP mode
 ///   - Starts demo in Thread mode (privileged, DebugMonitor works)
-/// Retries once on failure.
+/// Retries up to 3 times on failure (e.g. "demo already running" → kill → retry).
 fn start_debug_session(serial: &mut Box<dyn SerialPort>) {
-    for attempt in 1..=2 {
+    for attempt in 1..=3 {
         if attempt > 1 {
             eprintln!("  {YELLOW}Retry: recovering to shell...{RESET}");
-            let _ = serial.write_all(b"$D#44");
-            let _ = serial.flush();
-            std::thread::sleep(Duration::from_millis(300));
+            // Detach GDB on the dedicated GDB port (where RSP actually
+            // runs in dual-CDC debug mode).  Sending $D#44 to the shell
+            // port has no effect — RSP isn't active there.
+            detach_gdb_port();
             drain(serial);
             send_line(serial, "kill");
-            drain_for(serial, Duration::from_millis(500));
+            // Wait for kill response + demo exit rather than blind drain
+            let kill_resp = read_until(serial, "spike>", Duration::from_secs(3));
+            if kill_resp.contains("Abort requested") {
+                let _ = read_until(serial, "spike>", Duration::from_secs(5));
+            }
             send_line(serial, "");
             let resp = read_until(serial, "spike>", Duration::from_secs(3));
             if !resp.contains("spike>") {
@@ -611,6 +679,24 @@ fn start_debug_session(serial: &mut Box<dyn SerialPort>) {
             return;
         }
 
+        // "already running" means the previous kill didn't take effect.
+        // The demo is likely halted at a GDB breakpoint on the GDB port
+        // (ttyACM1), so it can't check the abort flag.  Detach GDB first
+        // to resume the demo, then kill it cooperatively.
+        if greeting.contains("already running") {
+            eprintln!("  {YELLOW}Demo still running — detaching GDB + kill before retry...{RESET}");
+            detach_gdb_port();
+            std::thread::sleep(Duration::from_millis(200));
+            drain_for(serial, Duration::from_millis(100));
+            send_line(serial, "kill");
+            // Wait for demo to actually exit (read response + exit message)
+            let kill_resp = read_until(serial, "spike>", Duration::from_secs(3));
+            if kill_resp.contains("Abort requested") {
+                let _ = read_until(serial, "spike>", Duration::from_secs(5));
+            }
+            continue; // go to next attempt
+        }
+
         // Greeting not seen — probe RSP directly
         eprintln!("  {YELLOW}Debug greeting not seen ({} bytes: {:?}) — probing RSP...{RESET}",
             greeting.len(), &greeting[..greeting.len().min(120)]);
@@ -622,11 +708,11 @@ fn start_debug_session(serial: &mut Box<dyn SerialPort>) {
             return;
         }
 
-        eprintln!("  {RED}RSP probe failed (attempt {attempt}/2){RESET}");
+        eprintln!("  {RED}RSP probe failed (attempt {attempt}/3){RESET}");
     }
 
     die(
-        "Debug session failed after 2 attempts.\n\
+        "Debug session failed after 3 attempts.\n\
          Possible causes:\n\
          - No binary loaded (upload failed?)\n\
          - Firmware doesn't support 'debug' command (needs reflash)\n\
@@ -743,6 +829,12 @@ fn cmd_upload(args: &[String]) {
 
     let mut serial = open_serial_robust(&port);
     ensure_shell_mode(&mut serial);
+
+    // Detach GDB on the dedicated GDB port if a previous debug session
+    // left RSP active.  Without this, `kill` can't reach a demo halted
+    // at a breakpoint (it isn't executing code to check the abort flag).
+    detach_gdb_port();
+
     send_line(&mut serial, "kill");
     drain_for(&mut serial, Duration::from_millis(500));
 

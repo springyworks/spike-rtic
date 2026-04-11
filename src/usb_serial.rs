@@ -115,6 +115,7 @@ pub unsafe fn init() -> &'static UsbBusAllocator<UsbBus<SpikeUsbOtg>> {
 /// Device class 0xEF (misc) with IAD sub/protocol tells the host OS
 /// to look for Interface Association Descriptors — each CDC function
 /// groups its comm + data interfaces under one IAD.
+#[allow(clippy::type_complexity)]
 pub fn create_device(
     bus: &'static UsbBusAllocator<UsbBus<SpikeUsbOtg>>,
 ) -> (

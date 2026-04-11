@@ -30,7 +30,7 @@
 //!   - [1]     reserved (0)
 //!   - [28:2]  COMP   — bits [28:2] of the instruction address
 //!   - [31:30] REPLACE — 00=remap, 01=bkpt on lower halfword,
-//!                        10=bkpt on upper halfword, 11=bkpt on both
+//!     10=bkpt on upper halfword, 11=bkpt on both
 //!
 //! For breakpoints: we want REPLACE = 0b11 (breakpoint on word access)
 //! which works for both Thumb-2 (32-bit) and Thumb (16-bit) instructions.

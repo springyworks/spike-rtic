@@ -559,7 +559,7 @@ impl GdbStub {
                             }
                         }
                         // Z2 = write watchpoint, Z3 = read, Z4 = access
-                        2 | 3 | 4 => {
+                        2..=4 => {
                             let func = match wp_type {
                                 2 => dwt::WatchFunc::DataWrite,
                                 3 => dwt::WatchFunc::DataRead,
@@ -602,7 +602,7 @@ impl GdbStub {
                             unsafe { fpb::clear_breakpoint(addr); }
                             write_packet(rw, b"OK");
                         }
-                        2 | 3 | 4 => {
+                        2..=4 => {
                             for n in 0..4u32 {
                                 let (comp_addr, _, _, _) = dwt::read_watchpoint(n);
                                 if comp_addr == addr {
@@ -748,7 +748,7 @@ impl GdbStub {
                 } else if starts_with(args, b"MustReplyEmpty") {
                     write_packet(rw, b"");
                 } else {
-                    write_packet(rw, b"");
+                    write_packet(rw, b""); // unsupported qSupported feature
                 }
             }
 

@@ -131,7 +131,7 @@
             "preLaunchTask": "xtask-debug-gdb-exercise"
         },
         {
-            // "name": "Quick: reg_dump (LLDB)",
+            "name": "Quick: reg_dump (LLDB)",
             "type": "lldb",
             "request": "custom",
             "initCommands": [

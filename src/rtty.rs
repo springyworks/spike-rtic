@@ -95,7 +95,7 @@ const ITA2: [(u8, u8); 32] = [
 /// Returns (baudot_code, needs_figs_shift).
 /// Returns None for characters that have no Baudot representation.
 pub fn ascii_to_baudot(ch: u8) -> Option<(u8, bool)> {
-    let upper = if ch >= b'a' && ch <= b'z' { ch - 32 } else { ch };
+    let upper = if ch.is_ascii_lowercase() { ch - 32 } else { ch };
 
     // Search letters column first
     for (code, &(letter, _)) in ITA2.iter().enumerate() {

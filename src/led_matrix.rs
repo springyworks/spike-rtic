@@ -259,9 +259,7 @@ pub unsafe fn update() {
 /// Clear all LEDs (all channels to 0) and update.
 pub unsafe fn clear() {
     let buf = &mut *core::ptr::addr_of_mut!(GS_BUF);
-    for i in 0..FRAME_SIZE {
-        buf[i] = 0;
-    }
+    buf[..FRAME_SIZE].fill(0);
     update();
 }
 

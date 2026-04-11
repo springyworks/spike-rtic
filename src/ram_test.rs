@@ -107,7 +107,7 @@ pub fn cmd_raminfo<F: FnMut(&[u8])>(write_fn: &mut F) {
     write_fn(w.written());
 
     // Free RAM = between end of BSS and current SP (stack grows down)
-    let free = if sp > bss_end { sp - bss_end } else { 0 };
+    let free = sp.saturating_sub(bss_end);
     let mut w = BufWriter::new(&mut tmp);
     let _ = write!(w, "Free (heap area): {} bytes\r\n", free);
     write_fn(w.written());

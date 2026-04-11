@@ -1,10 +1,5 @@
 # hub_state.py -- Hub Connection State Detector
 
-[← Main README](../README.md) · [User Manual](../USER_MANUAL.md) · [Reference Manual](../REFERENCE_MANUAL.md) · [API Reference](../spike-hub-api/README.md) · [RAM Demos](../examples/hub-ram-demos/README.md) · [Helper Tools](../helper-tools/README.md) · [Dev Notes](../dev_notes/)
-
----
-
-
 Detects the SPIKE Prime hub's connection state and optionally
 enters GDB RSP mode automatically. Kills processes blocking the
 serial port instead of making you do it manually.

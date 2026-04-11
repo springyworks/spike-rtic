@@ -85,6 +85,7 @@
 		"command-runner.terminal.autoClear": false,
 		"command-runner.terminal.cwd": "$PROJECT_ROOT",
 		"command-runner.commands": {
+		
 			"🔌 Hub Connect (status + shell)": "cargo xtask connect",
 			"📊 Hub Status": "cargo xtask status",
 			"⚡ Flash Firmware": "cargo xtask flash",

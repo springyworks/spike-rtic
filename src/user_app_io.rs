@@ -530,9 +530,9 @@ extern "C" fn demo_imu_read(buf: *mut u8, len: u32) -> u32 {
 }
 
 extern "C" fn demo_set_hub_led(r: u32, g: u32, b: u32) {
-    let r16 = ((r.min(100) as u32) * 0xFFFF / 100) as u16;
-    let g16 = ((g.min(100) as u32) * 0xFFFF / 100) as u16;
-    let b16 = ((b.min(100) as u32) * 0xFFFF / 100) as u16;
+    let r16 = (r.min(100) * 0xFFFF / 100) as u16;
+    let g16 = (g.min(100) * 0xFFFF / 100) as u16;
+    let b16 = (b.min(100) * 0xFFFF / 100) as u16;
     led_matrix::set_status_rgb(crate::pins::BATTERY_LED, r16, g16, b16);
     unsafe { led_matrix::update(); }
 }
@@ -597,11 +597,10 @@ pub extern "C" fn demo_wait_event(mask: u32, timeout_ms: u32) -> u32 {
         }
 
         // Check input buffer has data
-        if mask & spike_hub_api::EVT_INPUT != 0 {
-            if input_available() {
+        if mask & spike_hub_api::EVT_INPUT != 0
+            && input_available() {
                 fired |= spike_hub_api::EVT_INPUT;
             }
-        }
 
         if fired != 0 {
             return fired;
@@ -661,7 +660,7 @@ pub fn demo_motor_goto_inner(port: u32, degrees: i32) -> i32 {
     let distance = (degrees - init_pos).abs();
     let approach_ms = ((distance as u64 * 1000) / 200).min(15000) as u32;
     let total_ms = approach_ms + settle_hold_ms + 5000;
-    let total_iters = (total_ms + 19) / 20;
+    let total_iters = total_ms.div_ceil(20);
 
     let mut settled_at: Option<u32> = None;
     let mut approach_done = false;

@@ -202,7 +202,7 @@ unsafe fn i2c_read_byte(ack: bool) -> u8 {
 /// Write one register.
 unsafe fn write_reg(reg: u8, val: u8) -> bool {
     i2c_start();
-    if !i2c_write_byte((ACTIVE_ADDR << 1) | 0) { i2c_stop(); return false; }
+    if !i2c_write_byte(ACTIVE_ADDR << 1) { i2c_stop(); return false; }
     if !i2c_write_byte(reg) { i2c_stop(); return false; }
     if !i2c_write_byte(val) { i2c_stop(); return false; }
     i2c_stop();
@@ -212,7 +212,7 @@ unsafe fn write_reg(reg: u8, val: u8) -> bool {
 /// Read one register.
 unsafe fn read_reg(reg: u8) -> Option<u8> {
     i2c_start();
-    if !i2c_write_byte((ACTIVE_ADDR << 1) | 0) { i2c_stop(); return None; }
+    if !i2c_write_byte(ACTIVE_ADDR << 1) { i2c_stop(); return None; }
     if !i2c_write_byte(reg) { i2c_stop(); return None; }
     i2c_start(); // repeated start
     if !i2c_write_byte((ACTIVE_ADDR << 1) | 1) { i2c_stop(); return None; }
@@ -225,7 +225,7 @@ unsafe fn read_reg(reg: u8) -> Option<u8> {
 unsafe fn read_regs(start_reg: u8, buf: &mut [u8]) -> bool {
     if buf.is_empty() { return true; }
     i2c_start();
-    if !i2c_write_byte((ACTIVE_ADDR << 1) | 0) { i2c_stop(); return false; }
+    if !i2c_write_byte(ACTIVE_ADDR << 1) { i2c_stop(); return false; }
     if !i2c_write_byte(start_reg) { i2c_stop(); return false; }
     i2c_start(); // repeated start
     if !i2c_write_byte((ACTIVE_ADDR << 1) | 1) { i2c_stop(); return false; }

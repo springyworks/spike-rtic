@@ -160,7 +160,7 @@ pub unsafe fn init() {
     init_timer(pins::TIM4_BASE);
 
     // Configure each port's channels and start in coast (both pins LOW)
-    for (_idx, port) in PORTS.iter().enumerate() {
+    for port in PORTS.iter() {
         init_channel(port.timer, port.ccr1_offset);
         init_channel(port.timer, port.ccr2_offset);
         // Coast: both motor pins as GPIO output LOW
@@ -223,7 +223,7 @@ pub fn set(port_idx: u32, speed: i32) {
     let af = timer_af(mp.timer);
 
     let duty = speed.unsigned_abs().min(100);
-    let ccr = (duty * (PWM_ARR + 1) / 100) as u32;
+    let ccr = duty * (PWM_ARR + 1) / 100;
 
     unsafe {
         if speed > 0 {
@@ -538,7 +538,7 @@ pub fn trial(port_idx: u32, hold_ms: u32, print: TrialPrint) {
 fn isqrt(n: u64) -> u64 {
     if n == 0 { return 0; }
     let mut x = n;
-    let mut y = (x + 1) / 2;
+    let mut y = x.div_ceil(2);
     while y < x {
         x = y;
         y = (x + n / x) / 2;
@@ -769,7 +769,7 @@ impl Pid {
         // ── Proportional ──
         // With high Kp + output cap, P is saturated for large errors
         // and proportional for small errors near target. No adaptive Kp needed.
-        let p = (self.kp as i64 * position_error as i64 >> 10) as i32;
+        let p = ((self.kp as i64 * position_error as i64) >> 10) as i32;
 
         // ── Integral ──
         // Pybricks-style: only accumulate when near target (within 2× saturation
@@ -788,13 +788,13 @@ impl Pid {
             let i_max = if self.ki > 0 { (self.out_max << 10) / self.ki } else { 100_000 };
             self.integral = self.integral.clamp(-i_max, i_max);
         }
-        let i = (self.ki as i64 * self.integral as i64 >> 10) as i32;
+        let i = ((self.ki as i64 * self.integral as i64) >> 10) as i32;
 
         // ── Derivative on speed error ──
         // Pybricks-style: D = Kd × (ref_speed - measured_speed).
         // This damps oscillation without fighting the approach (unlike
         // derivative-on-error which produces negative D during approach).
-        let d = (self.kd as i64 * speed_error as i64 >> 10) as i32;
+        let d = ((self.kd as i64 * speed_error as i64) >> 10) as i32;
 
         self.prev_error = position_error;
 
@@ -827,16 +827,16 @@ impl Pid {
             self.kp
         };
 
-        let p = (effective_kp as i64 * error as i64 >> 10) as i32;
+        let p = ((effective_kp as i64 * error as i64) >> 10) as i32;
 
         if error.abs() > self.integral_deadzone {
             self.integral += error;
             let i_max = (self.out_max << 10) / self.ki.max(1);
             self.integral = self.integral.clamp(-i_max, i_max);
         }
-        let i = (self.ki as i64 * self.integral as i64 >> 10) as i32;
+        let i = ((self.ki as i64 * self.integral as i64) >> 10) as i32;
 
-        let d = (self.kd as i64 * (error - self.prev_error) as i64 >> 10) as i32;
+        let d = ((self.kd as i64 * (error - self.prev_error) as i64) >> 10) as i32;
         self.prev_error = error;
 
         (p + i + d).clamp(self.out_min, self.out_max)
@@ -844,16 +844,16 @@ impl Pid {
 
     /// Simple update (no adaptive gain, for backward compat).
     pub fn update(&mut self, error: i32) -> i32 {
-        let p = (self.kp as i64 * error as i64 >> 10) as i32;
+        let p = ((self.kp as i64 * error as i64) >> 10) as i32;
 
         if error.abs() > self.integral_deadzone {
             self.integral += error;
             let i_max = (self.out_max << 10) / self.ki.max(1);
             self.integral = self.integral.clamp(-i_max, i_max);
         }
-        let i = (self.ki as i64 * self.integral as i64 >> 10) as i32;
+        let i = ((self.ki as i64 * self.integral as i64) >> 10) as i32;
 
-        let d = (self.kd as i64 * (error - self.prev_error) as i64 >> 10) as i32;
+        let d = ((self.kd as i64 * (error - self.prev_error) as i64) >> 10) as i32;
         self.prev_error = error;
 
         (p + i + d).clamp(self.out_min, self.out_max)

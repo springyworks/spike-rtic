@@ -79,9 +79,9 @@ const AP_RW_RO:    u32 = 0b010 << 24; // Priv RW, unpriv RO
 const AP_NONE:     u32 = 0b000 << 24; // No access, any privilege
 
 // TEX/S/C/B for normal memory (write-back, write-allocate, shareable)
-const NORMAL_MEM: u32 = (0b000 << 19) | (1 << 18) | (1 << 17) | (1 << 16);
+const NORMAL_MEM: u32 = (1 << 18) | (1 << 17) | (1 << 16);
 // TEX/S/C/B for device memory (strongly-ordered for peripherals)
-const DEVICE_MEM: u32 = (0b000 << 19) | (1 << 18) | (0 << 17) | (1 << 16);
+const DEVICE_MEM: u32 = (1 << 18) | (1 << 16);
 
 // ── Stack guard constants ──────────────────────────────────
 
@@ -589,11 +589,10 @@ pub unsafe extern "C" fn SVCall_handler() {
     //
     // On kill: redirect to label 2 in run_sandboxed via ABORT_CTX.
     // Uses the shared redirect_to_abort_landing() mechanism.
-    if svc_num != 100 && user_app_io::is_aborted() && is_sandboxed() {
-        if ABORT_CTX[1] != 0 {
+    if svc_num != 100 && user_app_io::is_aborted() && is_sandboxed()
+        && ABORT_CTX[1] != 0 {
             redirect_to_abort_landing(0xDEAD_ABCD);
         }
-    }
 
     let ret: u32 = match svc_num {
         // SVC #0: write(ptr, len)

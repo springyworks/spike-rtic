@@ -17,8 +17,8 @@
 //!     USB charger (ch3)
 //!
 //! ## Flash via DFU
-//!   1. Enter DFU: hold center button during power-on, or `dfu` cmd,
-//!      or hold left button while running.
+//!   1. Enter DFU: if hub active , left bottum button , remove usb connector 
+//!      then hold bt (upper-right) button, then insert USB connector , hold bt button for about 7 secs
 //!   2. `dfu-util -d 0694:0011 -a 0 -s 0x08008000:leave -D firmware.bin`
 //!      (Hub uses LEGO DFU bootloader at VID:PID 0x0694:0x0011)
 //!
@@ -131,8 +131,20 @@ unsafe fn init_button_adc() {
 }
 
 /// Read a single ADC channel (blocking).
+///
+/// Raises BASEPRI to mask all RTIC priorities during the conversion
+/// sequence.  Without this, a higher-priority task (e.g. button_poll
+/// at pri 2) can preempt between SWSTART and EOC, run its own ADC
+/// conversion on a different channel, consume the EOC flag, and leave
+/// the preempted caller spinning forever.
 pub fn read_adc(channel: u32) -> u32 {
     unsafe {
+        // Mask all RTIC interrupts (pri 1-3 → BASEPRI ≤ 0x20 blocks
+        // everything with priority value ≥ 0x20 in the 4-bit scheme).
+        let saved = cortex_m::register::basepri::read();
+        cortex_m::register::basepri::write(0x20);
+        cortex_m::asm::isb();
+
         reg_write(ADC1, ADC_SQR3, channel);
         // Dummy conversion: after switching channels the S/H cap
         // still holds the previous channel's charge.  Discard it.
@@ -142,7 +154,11 @@ pub fn read_adc(channel: u32) -> u32 {
         // Real conversion
         reg_modify(ADC1, ADC_CR2, 0, 1 << 30); // SWSTART
         while reg_read(ADC1, ADC_SR) & (1 << 1) == 0 {} // wait EOC
-        reg_read(ADC1, ADC_DR)
+        let result = reg_read(ADC1, ADC_DR);
+
+        cortex_m::register::basepri::write(saved);
+
+        result
     }
 }
 

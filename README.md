@@ -87,6 +87,7 @@ Full hardware details in [REFERENCE_MANUAL.md §1](REFERENCE_MANUAL.md#1-hardwar
 - **32 MB external flash** — store/load/run demos from SPI flash
 - **MPU guard bands** — stack overflow detection with fault marker surviving reset
 - **65 automated tests** pass
+- **Real RTIC-sync primitives in RAM demos** — privileged demos can use actual `rtic_sync::Channel` and `Signal` types from the RTIC v2 ecosystem, not simulations
 
 ---
 

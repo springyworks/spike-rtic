@@ -86,6 +86,15 @@ pub const EVT_TIMEOUT: u32 = 1 << 3;
 /// Input data available from `send` shell command.
 pub const EVT_INPUT: u32 = 1 << 4;
 
+// ── Privileged demo marker ─────────────────────────────────────
+
+/// Magic word placed in `.demo_header` section by demos that require
+/// privileged mode (`go!`).  Firmware checks the first word of the
+/// binary; if it matches, `go` (sandboxed) is refused with an error.
+///
+/// Value: ASCII "PRIV" (0x56495250 little-endian).
+pub const PRIV_MAGIC: u32 = 0x5652_4950; // "PRIV" as [u8; 4] LE
+
 // ── Upload buffer ──────────────────────────────────────────────
 
 /// Base address of the upload buffer in SRAM2.

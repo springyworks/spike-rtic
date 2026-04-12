@@ -1032,13 +1032,30 @@ impl Shell {
                     return;
                 }
 
-                let addr = parts.next().and_then(parse_num)
+                let mut addr = parts.next().and_then(parse_num)
                     .unwrap_or(upload::upload_buf_addr());
 
                 // Sanity: must be in SRAM range
                 if !(0x2000_0000..0x2005_0000).contains(&addr) {
                     self.push(b"ERR: addr outside SRAM (0x20000000..0x20050000)\r\n");
                     return;
+                }
+
+                // ── Privileged-demo detection ──
+                // If the first word of the binary matches PRIV_MAGIC, the demo
+                // was built with a .demo_header section and requires go! (privileged).
+                // Refuse sandboxed launch to prevent a MemManage fault.
+                let first_word = unsafe {
+                    core::ptr::read_volatile(addr as *const u32)
+                };
+                if first_word == spike_hub_api::PRIV_MAGIC {
+                    if sandboxed {
+                        self.push(b"ERR: demo requires privileged mode.\r\n");
+                        self.push(b"     Use: go!  (not go)\r\n");
+                        return;
+                    }
+                    // Skip the 4-byte privilege marker; _start is at addr+4
+                    addr += 4;
                 }
 
                 let mut tmp = [0u8; 80];
@@ -1064,12 +1081,20 @@ impl Shell {
                     return;
                 }
 
-                let addr = parts.next().and_then(parse_num)
+                let mut addr = parts.next().and_then(parse_num)
                     .unwrap_or(upload::upload_buf_addr());
 
                 if !(0x2004_0000..0x2005_0000).contains(&addr) {
                     self.push(b"ERR: addr outside SRAM2 (0x20040000..0x20050000)\r\n");
                     return;
+                }
+
+                // Skip PRIV_MAGIC header if present (debug is always privileged)
+                let first_word = unsafe {
+                    core::ptr::read_volatile(addr as *const u32)
+                };
+                if first_word == spike_hub_api::PRIV_MAGIC {
+                    addr += 4;
                 }
 
                 let mut tmp = [0u8; 80];

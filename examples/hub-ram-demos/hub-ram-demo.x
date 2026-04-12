@@ -15,6 +15,16 @@ MEMORY
 
 SECTIONS
 {
+    /* Optional demo header — privileged demos place PRIV_MAGIC here.
+     * Firmware checks the first word before launching; if it matches
+     * PRIV_MAGIC and the user typed `go` (sandboxed), launch is refused.
+     * Non-privileged demos omit this section so _start stays at offset 0.
+     */
+    .demo_header :
+    {
+        KEEP(*(.demo_header))
+    } > RAM
+
     .text :
     {
         KEEP(*(.text._start))

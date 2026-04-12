@@ -4,4 +4,4 @@
 
 ---
 
-see: file   $PROJECT_ROOT/examples/hub-ram-demos/README.md
+· RAM Demos see: [RAM Demos](../README.md) (file $PROJECT\_ROOT/examples/hub-ram-demos/README.md)

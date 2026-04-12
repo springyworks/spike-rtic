@@ -16,6 +16,11 @@ exclude = ["xtask"]
 
 [dependencies]
 spike-hub-api = { path = "../../spike-hub-api" }
+rtic-sync = { path = "../../../rtic/rtic-sync" }
+rtic-common = { path = "../../../rtic/rtic-common" }
+heapless = "0.9"
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+portable-atomic = { version = "1", default-features = false }
 
 [[bin]]
 name = "spike-demo"

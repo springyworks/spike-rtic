@@ -218,6 +218,10 @@ tag definitions and usage patterns.
 | `reg-dump`         | `examples/reg_dump.rs`           | v2+  | Hardware register inspection |
 | `sensor-dump`      | `examples/sensor_dump.rs`        | v3+  | Raw RGBI hex dump + ring buffer diagnostics |
 | `event-driven`     | `examples/event_driven.rs`       | v12+ | Event-driven demo: IMU, thermal, buttons, host input (EVT_*) |
+| **`rtic-channels`** | **`examples/rtic_channels.rs`**  | **v12+** | **Real `rtic-sync` Channel + Signal primitives on 5×5 LEDs** (`go!`) |
+| `rtic-async-demo`  | `examples/rtic_async_demo.rs`    | v12+ | Simulated RTIC async concepts on 24 LEDs (`go`) |
+| `pdp11-lights`     | `examples/pdp11_lights.rs`       | v12+ | PDP-11 front-panel dashboard: live hardware registers on LEDs (`go!`) |
+| `traffic-crossroad`| `examples/traffic_crossroad.rs`  | v12+ | Traffic light FSM with pedestrian crossing and sound |
 
 **Default port layout:** motors on ports **A** and **B**, color sensor
 on port **F**.
@@ -389,10 +393,57 @@ After lifting the battery, hold **center** to boot normally or
 
 ---
 
-## 7. Dependencies
+## 7. Using Real RTIC Crate Primitives
+
+Privileged demos (`go!`) can use actual crates from the
+[RTIC ecosystem](https://github.com/rtic-rs/rtic) —
+the same types used inside real `#[rtic::app]` firmware.
+
+The **`rtic_channels`** demo demonstrates this: it links against
+`rtic-sync` (the synchronization crate from RTIC v2) and uses
+real `Channel`, `Signal`, `Sender`, `Receiver` types with their
+`try_send` / `try_recv` / `write` / `try_read` methods.
+
+### What it uses
+
+| RTIC primitive | Method | Role in demo |
+|---|---|---|
+| `rtic_sync::channel::Channel<u8, 4>` | `try_send`, `try_recv` | 9 MPSC channels (4 pipeline + 5 ring) |
+| `rtic_sync::signal::Signal<u8>` | `write`, `try_read` | Broadcast to fan-out LEDs |
+| `Sender::is_full()` / `is_empty()` | — | Queue fill level on stats row |
+
+These are **not simulations** — they are the identical types compiled
+into any RTIC v2 application.  The demo creates channels on the stack,
+splits them into sender/receiver pairs, and drives a cooperative
+scheduler that passes thousands of messages per second.
+
+### How it works
+
+Privileged mode (`go!`) runs with full Cortex-M privilege, so
+`cortex-m`'s `critical-section-single-core` implementation works
+normally (PRIMASK-based).  The demo needs no MCU register access
+— only `MonitorApi` callbacks for LEDs and timing.
+
+### Dependencies added to Cargo.toml
+
+```toml
+rtic-sync     = { path = "../../../rtic/rtic-sync" }
+rtic-common   = { path = "../../../rtic/rtic-common" }
+heapless      = "0.9"
+cortex-m      = { version = "0.7", features = ["critical-section-single-core"] }
+portable-atomic = { version = "1", default-features = false }
+```
+
+---
+
+## 8. Dependencies
 
 - [`spike-hub-api`](../../spike-hub-api/) crate — shared `MonitorApi`
   struct definition.  Located at `../../spike-hub-api` relative to this
   directory.
+- [`rtic-sync`](https://github.com/rtic-rs/rtic) — real RTIC channel/signal
+  primitives (used by `rtic_channels` demo).
+- `cortex-m` with `critical-section-single-core` — provides
+  `critical_section` implementation for `rtic-sync`.
 - Rust nightly toolchain with `thumbv7em-none-eabihf` target.
 - `arm-none-eabi-objcopy` (or `rust-objcopy`) for binary extraction.

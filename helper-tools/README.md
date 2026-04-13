@@ -119,5 +119,5 @@ python3 $PROJECT_ROOT/helper-tools/test_sandbox.py
 
 ---
 
-*See also:* [aux/99-spike-hub.rules](../aux/99-spike-hub.rules) for
+*See also:* [99-spike-hub.rules](99-spike-hub.rules) for
 udev symlink setup.
